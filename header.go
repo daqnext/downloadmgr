@@ -6,24 +6,21 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"sync"
 )
 
-var ignoreHeaderMap sync.Map
-
-func SetIgnoreHeader(ignores []string) {
-	ignoreHeaderMap.Range(func(key, value interface{}) bool {
-		ignoreHeaderMap.Delete(key)
+func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
+	dm.ignoreHeaderMap.Range(func(key, value interface{}) bool {
+		dm.ignoreHeaderMap.Delete(key)
 		return true
 	})
 	for _, v := range ignores {
-		ignoreHeaderMap.Store(v, struct{}{})
+		dm.ignoreHeaderMap.Store(v, struct{}{})
 	}
 }
 
-func SaveHeader(filePath string, originHeader http.Header) error {
+func (dm *DownloadMgr) SaveHeader(filePath string, originHeader http.Header) error {
 	folder := path.Dir(filePath)
-	err := os.MkdirAll(folder, 0666)
+	err := os.MkdirAll(folder, 0777)
 	if err != nil {
 		return err
 	}
@@ -43,7 +40,7 @@ func SaveHeader(filePath string, originHeader http.Header) error {
 	write := bufio.NewWriter(file)
 
 	for k, va := range originHeader {
-		_, exist := ignoreHeaderMap.Load(k)
+		_, exist := dm.ignoreHeaderMap.Load(k)
 		if exist {
 			continue
 		}

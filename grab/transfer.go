@@ -21,7 +21,7 @@ type transfer struct {
 func newTransfer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) *transfer {
 	return &transfer{
 		ctx:   ctx,
-		gauge: bps.NewSMA(6), // five second moving average sampling every second
+		gauge: bps.NewSMA(10), // 10 seconds moving average sampling every second
 		//lim:   lim,
 		w: dst,
 		r: src,

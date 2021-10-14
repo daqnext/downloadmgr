@@ -6,6 +6,8 @@ import (
 )
 
 func Test_download(t *testing.T) {
+	dm := NewDownloadMgr()
+
 	//targetUrl := "https://coldcdn.com/api/cdn/wr1cs5/video/spacex2.mp4"
 	targetUrl := "https://golang.org/dl/go1.17.2.darwin-amd64.pkg"
 	saveFile := "./downloadFile/go1.17.2.darwin-amd64.pkg"
@@ -16,7 +18,7 @@ func Test_download(t *testing.T) {
 	}
 
 	if header != nil {
-		SaveHeader(saveFile, header)
+		dm.SaveHeader(saveFile, header)
 	}
 
 	transferTimeoutSec := 150

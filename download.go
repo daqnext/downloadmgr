@@ -33,6 +33,10 @@ func PreHandleOrigin(targetUrl string) (http.Header, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+	if resp.Body == nil {
+		return resp.Header, false, nil
+	}
+	defer resp.Body.Close()
 	result, exist := resp.Header["Accept-Ranges"]
 	if exist {
 		for _, v := range result {
@@ -42,11 +46,6 @@ func PreHandleOrigin(targetUrl string) (http.Header, bool, error) {
 			}
 		}
 	}
-
-	if resp.Body == nil {
-		return resp.Header, false, nil
-	}
-	defer resp.Body.Close()
 
 	buf := &bytes.Buffer{}
 	written, err := io.CopyN(buf, resp.Body, 2)
@@ -99,14 +98,6 @@ func Download(savePath string, originPath string, transferTimeoutSec int) {
 		return
 	}
 
-	// check for errors
-	//if err := resp.Err(); err != nil {
-	//	fmt.Fprintf(os.Stderr, "Download failed: %v\n", err)
-	//	os.Exit(1)
-	//}
-
-	//log.Printf("  %v\n", resp.HTTPResponse.Status)
-
 	// start UI loop
 	ticker := time.NewTicker(1000 * time.Millisecond)
 	defer ticker.Stop()
@@ -118,7 +109,7 @@ Loop:
 		case <-ticker.C:
 			fmt.Printf("  transferred %v / %v bytes (%.2f%%)\n",
 				resp.BytesComplete(),
-				resp.Size,
+				resp.Size(),
 				100*resp.Progress())
 			//log.Println(resp.BytesPerSecond()/1000000,"MB/s")
 			speed := resp.BytesPerSecond()

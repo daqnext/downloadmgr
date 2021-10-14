@@ -42,6 +42,8 @@ type Client struct {
 	// to the transfer progress statistics. The BufferSize of each request can
 	// be overridden on each Request object. Default: 32KB.
 	BufferSize int
+
+	CanResume bool
 }
 
 // NewClient returns a new file download Client, using default configuration.
@@ -412,9 +414,10 @@ func (c *Client) readResponse(resp *Response) stateFunc {
 	}
 
 	if !resp.Request.NoStore && resp.requestMethod() == "HEAD" {
-		if resp.HTTPResponse.Header.Get("Accept-Ranges") == "bytes" {
-			resp.CanResume = true
-		}
+		//if resp.HTTPResponse.Header.Get("Accept-Ranges") == "bytes" {
+		//	resp.CanResume = true
+		//}
+		resp.CanResume = c.CanResume
 		return c.statFileInfo
 	}
 	return c.openWriter
