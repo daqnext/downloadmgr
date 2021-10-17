@@ -9,13 +9,22 @@ import (
 )
 
 func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
-	dm.ignoreHeaderMap.Range(func(key, value interface{}) bool {
-		dm.ignoreHeaderMap.Delete(key)
-		return true
-	})
+	//dm.ignoreHeaderMap.Range(func(key, value interface{}) bool {
+	//	dm.ignoreHeaderMap.Delete(key)
+	//	return true
+	//})
+	//for _, v := range ignores {
+	//	dm.ignoreHeaderMap.Store(v, struct{}{})
+	//}
+
+	dm.ignoreHeaderMapLock.Lock()
+	defer dm.ignoreHeaderMapLock.Unlock()
+
+	dm.ignoreHeaderMap = map[string]struct{}{}
 	for _, v := range ignores {
-		dm.ignoreHeaderMap.Store(v, struct{}{})
+		dm.ignoreHeaderMap[v] = struct{}{}
 	}
+
 }
 
 func (dm *DownloadMgr) SaveHeader(filePath string, originHeader http.Header) error {
@@ -39,8 +48,10 @@ func (dm *DownloadMgr) SaveHeader(filePath string, originHeader http.Header) err
 
 	write := bufio.NewWriter(file)
 
+	dm.ignoreHeaderMapLock.RLock()
+	defer dm.ignoreHeaderMapLock.RUnlock()
 	for k, va := range originHeader {
-		_, exist := dm.ignoreHeaderMap.Load(k)
+		_, exist := dm.ignoreHeaderMap[k]
 		if exist {
 			continue
 		}

@@ -26,7 +26,7 @@ func Test_smartGoRoutine(t *testing.T) {
 			d(1, 10-c)
 			log.Println(c)
 
-		}).Start()
+		}, nil).Start()
 
 		count++
 		if sr.PanicExist {

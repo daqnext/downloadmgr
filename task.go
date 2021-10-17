@@ -2,9 +2,9 @@ package downloadmgr
 
 import (
 	"context"
-	"fmt"
 	"github.com/daqnext/downloadmgr/grab"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -15,6 +15,7 @@ type TaskStatus int
 const (
 	New TaskStatus = iota
 	Idle
+	Pause
 	Downloading
 	Success
 	Fail
@@ -27,24 +28,80 @@ const (
 	randomTask
 )
 
+type BrokenType int
+
+const (
+	no_broken BrokenType = iota
+	broken_expire
+	broken_noSpeed
+	broken_pause
+	broken_lowSpeed
+)
+
 type Task struct {
-	id             uint64
-	originUrlArray []string
-	targetUrl      string
-	savePath       string
-	response       *grab.Response
-	status         TaskStatus
-	taskType       TaskType
-	resumable      bool
-	expireTime     int64 //for quick download, cancel task if expiry
-	channel        *DownloadChannel
+	//init with input param
+	id         uint64
+	targetUrl  string
+	savePath   string
+	taskType   TaskType
+	expireTime int64 //for quick download, cancel task if expiry
+
+	//modify when downloading
+	failTimes         int
+	lastFailTimeStamp int64
+	response          *grab.Response
+	cancel            context.CancelFunc
+	status            TaskStatus
+	resumable         bool
+	channel           DownloadChannel
+	dm                *DownloadMgr
 
 	//callback
-	onStart       func()
-	onSuccess     func()
-	onFail        func()
-	onPause       func()
-	onDownloading func()
+	onStart       func(task *Task)
+	onSuccess     func(task *Task)
+	onFail        func(task *Task)
+	onDownloading func(task *Task)
+}
+
+func newTask(id uint64, savePath string, targetUrl string, taskType TaskType, expireTime int64) *Task {
+	task := &Task{
+		id:         id,
+		savePath:   savePath,
+		targetUrl:  targetUrl,
+		taskType:   taskType,
+		expireTime: expireTime,
+		status:     New,
+	}
+
+	task.onStart = func(task *Task) {
+		llog.Println("onStart", "id", task.id, "savePath", task.savePath)
+	}
+
+	task.onSuccess = func(task *Task) {
+		llog.Println("onSuccess", "id", task.id, "savePath", task.savePath)
+	}
+
+	task.onFail = func(task *Task) {
+		llog.Println("onFail", "id", task.id, "savePath", task.savePath)
+	}
+	task.onDownloading = func(task *Task) {
+		llog.Println("onDownloading", "id", task.id, "savePath", task.savePath)
+	}
+
+	return task
+}
+
+func TimeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(ctx context.Context, net, addr string) (c net.Conn, err error) {
+	return func(ctx context.Context, netw, addr string) (net.Conn, error) {
+		conn, err := net.DialTimeout(netw, addr, cTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if rwTimeout > 0 {
+			conn.SetDeadline(time.Now().Add(rwTimeout))
+		}
+		return conn, nil
+	}
 }
 
 func (t *Task) StartDownload() {
@@ -52,6 +109,7 @@ func (t *Task) StartDownload() {
 	client := grab.NewClient()
 	client.CanResume = t.resumable
 	ctx, cancel := context.WithCancel(context.Background())
+	t.cancel = cancel
 	defer cancel()
 	connectTimeout := 5 * time.Second
 	//readWriteTimeout := time.Duration(transferTimeoutSec) * time.Second
@@ -61,36 +119,46 @@ func (t *Task) StartDownload() {
 	}}
 	client.HTTPClient = c
 	req, err := grab.NewRequest(tempSaveFile, t.targetUrl)
-	req.WithContext(ctx)
+	req = req.WithContext(ctx)
 	if err != nil {
 		log.Panicln(err)
 	}
 
 	// start download
-	log.Printf("Downloading %v...\n", req.URL())
+	llog.Printf("Downloading %s,form %v...\n", t.savePath, req.URL())
 	resp := client.Do(req)
-	//log.Println(resp)
 	if resp == nil {
-		log.Println("download fail", "err:", err)
+		llog.Println("download fail", "err:", err)
 		return
 	}
 
-	// start UI loop
+	t.response = resp
+
+	if t.taskType == quickTask && resp.HTTPResponse != nil && t.dm != nil {
+		t.dm.SaveHeader(t.savePath, resp.HTTPResponse.Header)
+	}
+
+	// start monitor loop
 	ticker := time.NewTicker(2000 * time.Millisecond)
 	defer ticker.Stop()
-
+	var needBroken bool
+	var brokenType BrokenType
 Loop:
 	for {
 		select {
 		case <-ticker.C:
-			fmt.Printf("  transferred %v / %v bytes (%.2f%%)\n",
+			llog.Printf("%s transferred %v / %v bytes (%.2f%%)",
+				t.savePath,
 				resp.BytesComplete(),
 				resp.Size(),
 				100*resp.Progress())
 
-			needBroken := t.channel.checkDownloadingState(t)
+			needBroken, brokenType = t.channel.checkDownloadingState(t)
 			if needBroken {
-				t.channel.handleBrokenTask(t)
+				if t.response.IsComplete() {
+					break Loop
+				}
+				llog.Println("broken task", t.savePath)
 				cancel()
 			}
 
@@ -101,26 +169,34 @@ Loop:
 	}
 
 	if err := resp.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Download failed: %v\n", err)
-		//
-		//os.Exit(1)
+		llog.Errorf("Download failed: %v\n", err)
+		t.channel.handleBrokenTask(t, brokenType)
 		return
 	}
 
-	log.Println("transferSize:", resp.BytesComplete())
-	log.Println(resp.BytesPerSecond())
+	llog.Println("transferSize:", resp.BytesComplete())
+	llog.Println(resp.BytesPerSecond())
 	info, _ := os.Stat(tempSaveFile)
-	log.Println("fileSize:", info.Size())
-	fmt.Printf("Download saved to %v \n", resp.Filename)
+	llog.Println("fileSize:", info.Size())
+	llog.Printf("Download saved to %v \n", resp.Filename)
 
 	//download success
 	os.Rename(resp.Filename, t.savePath)
+	if t.onSuccess != nil {
+		t.onSuccess(t)
+	}
+}
 
-	// Output:
-	// Downloading http://www.golang-book.com/public/pdf/gobook.pdf...
-	//   200 OK
-	//   transferred 42970 / 2893557 bytes (1.49%)
-	//   transferred 1207474 / 2893557 bytes (41.73%)
-	//   transferred 2758210 / 2893557 bytes (95.32%)
-	// Download saved to ./gobook.pdf
+func (t *Task) tryAgainOrFail() {
+	//
+	if t.failTimes > t.channel.getRetryTimesLimit() {
+		if t.onFail != nil {
+			t.onFail(t)
+		}
+		return
+	}
+	//try again
+	t.failTimes++
+	t.lastFailTimeStamp = time.Now().Unix()
+	t.channel.pushTaskToIdleList(t)
 }
