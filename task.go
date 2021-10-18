@@ -102,6 +102,11 @@ func newTask(
 
 func (t *Task) CancelDownload() {
 	t.cancelFlag = true
+
+	if t.response != nil && t.response.IsComplete() {
+		return
+	}
+
 	//stop download
 	if t.cancel != nil {
 		t.cancel()
