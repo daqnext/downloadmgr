@@ -3,17 +3,17 @@ package downloadmgr
 import (
 	"bytes"
 	"context"
+	"errors"
 	"github.com/daqnext/LocalLog/log"
 	"github.com/daqnext/go-smart-routine/sr"
 	"io"
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 )
-
-const randomDownloadingTimeSec = 7
 
 type DownloadMgr struct {
 	//channel to receive task
@@ -42,7 +42,7 @@ func NewDownloadMgr(logger *log.LocalLog) *DownloadMgr {
 	llog = logger
 
 	dm := &DownloadMgr{
-		globalDownloadTaskChan: make(chan *Task, 1024*10),
+		globalDownloadTaskChan: make(chan *Task, 1024*20),
 		currentId:              0,
 	}
 	dm.genDownloadChannel()
@@ -58,195 +58,128 @@ func NewDownloadMgr(logger *log.LocalLog) *DownloadMgr {
 func (dm *DownloadMgr) genDownloadChannel() {
 	dm.downloadChannel = map[string]DownloadChannel{}
 	//quickChannel
-	qc := initQueueChannel(1, 6, 1)
-	qc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
-		if task.channel.idleSize() > 0 {
-			if task.response.Duration().Seconds() > 10 && task.response.BytesPerSecond() < 1 {
-				//on speed and new task is waiting
-				return true, broken_noSpeed
-
-			}
-		}
-
-		if time.Now().Unix() > task.expireTime {
-			//task expire
-			return true, broken_expire
-		}
-
-		return false, no_broken
-	}
-	qc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-		case broken_expire:
-			//cancel and delete task
-			task.cancel()
-			task.tryAgainOrFail()
-		case broken_noSpeed:
-			task.cancel()
-			task.tryAgainOrFail()
-		case broken_lowSpeed:
-		}
-	}
-	//for debug
-	qc.name = quickChannel
+	qc := initQuickChannel()
 	dm.downloadChannel[quickChannel] = qc
 
 	//randomChannel
-	rc := initRandomChannel(1, 6, 2)
-	rc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
-		// if new task is waiting
-		if task.channel.idleSize() > 0 {
-			if task.response.Duration().Seconds() > 15 && task.response.BytesPerSecond() < 1 {
-				//no speed
-				return true, broken_noSpeed
-			}
-
-			llog.Println(task.savePath, task.response.Start.Unix())
-			if task.response.Duration().Seconds() > randomDownloadingTimeSec {
-				//pause
-				return true, broken_pause
-			}
-		}
-		return false, no_broken
-	}
-	rc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-			task.cancel()
-			//back to idle array
-			rc.pushTaskToIdleList(task)
-
-		case broken_expire:
-		case broken_noSpeed:
-			task.cancel()
-			task.tryAgainOrFail()
-		case broken_lowSpeed:
-		}
-	}
-	//for debug
-	rc.name = randomChannel
+	rc := initRandomPauseChannel()
 	dm.downloadChannel[randomChannel] = rc
 
 	//unpauseFastChannel
-	ufc := initQueueChannel(500*1024, 6, 1)
-	ufc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
-		if task.channel.idleSize() > 0 && task.response.Duration().Seconds() > 15 {
-			speed := task.response.BytesPerSecond()
-			if speed == 0 {
-				//fail
-				return true, broken_noSpeed
-			}
-			if speed < ufc.SpeedLimitBPS {
-				//to slow channel
-				return true, broken_lowSpeed
-			}
-		}
-
-		return false, no_broken
-	}
-	ufc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-		case broken_expire:
-		case broken_noSpeed:
-			task.cancel()
-			//retry or delete
-			task.tryAgainOrFail()
-		case broken_lowSpeed:
-			task.cancel()
-			//to slow channel
-		}
-	}
-	//for debug
-	ufc.name = unpauseFastChannel
+	ufc := initUnpauseFastChannel(dm)
 	dm.downloadChannel[unpauseFastChannel] = ufc
 
 	//unpauseSlowChannel
-	usc := initQueueChannel(1, 6, 1)
-	usc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
-		if task.channel.idleSize() > 0 &&
-			task.response.Duration().Seconds() > 15 &&
-			task.response.BytesPerSecond() < 1 {
-			//speed is too low
-			return true, broken_noSpeed
-		}
-		return false, no_broken
-	}
-	usc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-		case broken_expire:
-		case broken_noSpeed:
-			task.cancel()
-			//retry or delete
-			task.tryAgainOrFail()
-		case broken_lowSpeed:
-		}
-	}
-	//for debug
-	usc.name = unpauseSlowChannel
+	usc := initUnpauseSlowChannel()
 	dm.downloadChannel[unpauseSlowChannel] = usc
-
 }
 
-func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64) uint64 {
-	return dm.addDownloadTask(0, savePath, targetUrl, quickTask, expireTime)
+func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64,
+	onSuccess func(task *Task),
+	onFail func(task *Task),
+	onDownloading func(task *Task)) (*Task, error) {
+	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, onSuccess, onFail, onDownloading)
 }
 
-func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string) uint64 {
-	return dm.addDownloadTask(0, savePath, targetUrl, randomTask, 0)
+func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string,
+	onSuccess func(task *Task),
+	onFail func(task *Task),
+	onDownloading func(task *Task)) (*Task, error) {
+	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, onSuccess, onFail, onDownloading)
 }
 
-func (dm *DownloadMgr) addDownloadTask(id uint64, savePath string, targetUrl string, taskType TaskType, expireTime int64) uint64 {
-	taskId := id
-	if taskId == 0 {
-		//gen id
-		dm.idLock.Lock()
-		if dm.currentId >= math.MaxUint64 {
-			dm.currentId = 0
-		}
-		dm.currentId++
-		dm.idLock.Unlock()
-		taskId = dm.currentId
+func (dm *DownloadMgr) addDownloadTask(
+	savePath string,
+	targetUrl string,
+	taskType TaskType,
+	expireTime int64,
+	onSuccess func(task *Task),
+	onFail func(task *Task),
+	onDownloading func(task *Task),
+) (*Task, error) {
+	//gen id
+	dm.idLock.Lock()
+	if dm.currentId >= math.MaxUint64 {
+		dm.currentId = 0
 	}
+	dm.currentId++
+	dm.idLock.Unlock()
+	taskId := dm.currentId
 
 	//new task
-	task := newTask(taskId, savePath, targetUrl, taskType, expireTime)
+	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, onSuccess, onFail, onDownloading)
 	task.dm = dm
 
 	//into map
-	dm.taskMap.Store(task.id, task)
+	dm.taskMap.Store(task.Id, task)
 
 	//into channel
-	dm.globalDownloadTaskChan <- task
-	return task.id
+	if taskType == quickTask {
+		task.Status = Idle
+		//if quickTask, push into quickChannel
+		dm.downloadChannel[quickChannel].pushTaskToIdleList(task)
+	} else {
+		dm.globalDownloadTaskChan <- task
+	}
+	return task, nil
+}
+
+func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
+	v, exist := dm.taskMap.Load(id)
+	if !exist {
+		return nil
+	}
+	return v.(*Task)
 }
 
 //classifyNewTask loop classify task to different channel
 func (dm *DownloadMgr) classifyNewTaskLoop() {
 	sr.New_Panic_Redo(func() {
+	Outloop:
 		for {
 			select {
 			case task := <-dm.globalDownloadTaskChan:
+
+				startTime := task.lastFailTimeStamp + 15
+				if task.TaskType == quickTask {
+					startTime = 0
+				}
+				for {
+					if startTime <= time.Now().Unix() {
+						break
+					}
+
+					if len(dm.globalDownloadTaskChan) == 0 {
+						llog.Debugln("wait a moment to start", task)
+						time.Sleep(1 * time.Second)
+						continue
+					}
+
+					time.Sleep(100 * time.Millisecond)
+					dm.globalDownloadTaskChan <- task
+					llog.Debugln("back to globalDownloadTaskChan", task)
+					continue Outloop
+				}
+
 				//classify task
 				err := dm.classify(task)
 				if err != nil {
-					// Todo how to handle error
-					//log error
-					//llog.Println("classify task error",err)
-
-					//on failed
-					if task.onFail != nil {
-						task.onFail(task)
+					//if fail when classify
+					//try again or fail
+					llog.Debugln("classify error", task)
+					task.failTimes++
+					task.lastFailTimeStamp = time.Now().Unix()
+					if task.failTimes > 1 {
+						//fail
+						task.Status = Fail
+						if task.onFail != nil {
+							task.onFail(task)
+						}
+						os.Remove(task.SavePath + ".download")
+						os.Remove(task.SavePath + ".header")
+					} else {
+						//try again
+						dm.globalDownloadTaskChan <- task
 					}
 				}
 			}
@@ -256,7 +189,7 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 
 //PreHandleOrigin check is url support range get or not, and get origin header at same time
 func PreHandleOrigin(targetUrl string) (http.Header, bool, error) {
-	var req http.Request
+	var req = &http.Request{}
 	var err error
 	req.Method = "GET"
 	req.Close = true
@@ -264,14 +197,18 @@ func PreHandleOrigin(targetUrl string) (http.Header, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
-	req.WithContext(ctx)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
 	header := http.Header{}
 	header.Set("Range", "bytes=0-0")
 	req.Header = header
-	resp, err := http.DefaultClient.Do(&req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, false, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, false, errors.New("response status code error")
 	}
 	if resp.Body == nil {
 		return resp.Header, false, nil
@@ -301,24 +238,24 @@ func PreHandleOrigin(targetUrl string) (http.Header, bool, error) {
 //classify check header and distribute to different channel
 func (dm *DownloadMgr) classify(task *Task) error {
 
-	task.status = Idle
-	//if quickTask, push into quickChannel
-	if task.taskType == quickTask {
-		dm.downloadChannel[quickChannel].pushTaskToIdleList(task)
-		return nil
-	}
+	//task.status = Idle
+	////if quickTask, push into quickChannel
+	//if task.taskType == quickTask {
+	//	dm.downloadChannel[quickChannel].pushTaskToIdleList(task)
+	//	return nil
+	//}
 
 	// download header and check download is resumable or not
-	header, canResume, err := PreHandleOrigin(task.targetUrl)
+	header, canResume, err := PreHandleOrigin(task.TargetUrl)
 	if err != nil {
 		//task failed
-		task.status = Fail
+		task.Status = Fail
 		return err
 	}
 
 	if header != nil {
 		//save header
-		err := dm.SaveHeader(task.savePath, header)
+		err := dm.SaveHeader(task.SavePath, header)
 		if err != nil {
 			return err
 		}
@@ -327,6 +264,8 @@ func (dm *DownloadMgr) classify(task *Task) error {
 	if canResume {
 		task.resumable = true
 		dm.downloadChannel[randomChannel].pushTaskToIdleList(task)
+		//for test
+		//dm.downloadChannel[unpauseFastChannel].pushTaskToIdleList(task)
 	} else {
 		dm.downloadChannel[unpauseFastChannel].pushTaskToIdleList(task)
 	}
