@@ -112,10 +112,6 @@ func (t *Task) CancelDownload() {
 		t.cancel()
 	}
 
-	if t.channel != nil {
-		t.channel.popTaskFormIdleList()
-	}
-
 	//delete from channel
 
 	//delete file
