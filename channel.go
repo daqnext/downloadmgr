@@ -15,8 +15,6 @@ const (
 	unpauseSlowChannel = "unpauseSlowChannel"
 )
 
-const channelIdleTaskLimit = 1024 * 20
-
 const randomDownloadingTimeSec = 20
 const unpauseFastChannelSpeedLimit = 800 * 1024
 
@@ -34,108 +32,68 @@ const (
 	unpauseSlowChannelRetryTime = 1
 )
 
-//DownloadChannel interface for DownloadChannel
-type DownloadChannel interface {
-	idleSize() int
-	pushTaskToIdleList(task *Task)
-	//pushTaskToDownloading(task ...interface{})
-	popTaskFormIdleList() *Task
-	run()
-	checkDownloadingState(task *Task) (needBroken bool, brokenType BrokenType)
-	handleBrokenTask(task *Task, brokenType BrokenType)
-	getRetryTimesLimit() int
+type downloadChannel struct {
+	dm *DownloadMgr
 
-	//for debug
-	getChannelName() string
-}
+	speedLimitBPS         float64
+	downloadingCountLimit int
+	retryTimesLimit       int
 
-type DownloadChannelBase struct {
-	SpeedLimitBPS         float64
-	DownloadingCountLimit int
-	RetryTimesLimit       int
-	//DownloadingListLock   sync.Mutex
-	//DownloadingList       *arraylist.List
+	idleListLock sync.RWMutex
+	idleList     *arraylist.List
 
+	//func
 	//checkDownloadingStateFun check state to decide is continue or stop
 	checkDownloadingStateFunc func(task *Task) (needBroken bool, brokenType BrokenType)
-
 	//handleBrokenTaskFun how to handle if task broken
 	handleBrokenTaskFunc func(task *Task, brokenType BrokenType)
+	//get task from idle list
+	popTaskFormIdleList func() *Task
 
 	//for debug
 	name string
 }
 
-//func (dc *DownloadChannelBase) pushTaskToDownloading(task ...interface{}) {
-//	dc.DownloadingListLock.Lock()
-//	defer dc.DownloadingListLock.Unlock()
-//
-//	dc.DownloadingList.Add(task...)
-//}
+func (dc *downloadChannel) idleSize() int {
+	dc.idleListLock.Lock()
+	defer dc.idleListLock.Unlock()
 
-func (dc *DownloadChannelBase) handleBrokenTask(task *Task, brokenType BrokenType) {
-	if dc.handleBrokenTaskFunc != nil {
-		dc.handleBrokenTaskFunc(task, brokenType)
-	}
+	return dc.idleList.Size()
 }
 
-func (dc *DownloadChannelBase) checkDownloadingState(task *Task) (needBroken bool, brokenType BrokenType) {
-	if dc.checkDownloadingStateFunc != nil {
-		return dc.checkDownloadingStateFunc(task)
-	}
-	return false, no_broken
+func (dc *downloadChannel) pushTaskToIdleList(task *Task) {
+	dc.idleListLock.Lock()
+	defer dc.idleListLock.Unlock()
+
+	task.channel = dc
+	dc.idleList.Add(task)
 }
 
-func (dc *DownloadChannelBase) getChannelName() string {
+func (dc *downloadChannel) getChannelName() string {
 	return dc.name
 }
 
-func (dc *DownloadChannelBase) getRetryTimesLimit() int {
-	return dc.RetryTimesLimit
-}
-
-//QueueDownloadChannel FIFO start the download task
-type QueueDownloadChannel struct {
-	DownloadChannelBase
-	IdleChannel chan *Task
-}
-
-func initQueueChannel(speedLimitBPS float64, downloadingCountLimit int, retryTimesLimt int) *QueueDownloadChannel {
-	qdc := &QueueDownloadChannel{}
-	qdc.SpeedLimitBPS = speedLimitBPS
-	qdc.DownloadingCountLimit = downloadingCountLimit
-	qdc.RetryTimesLimit = retryTimesLimt
-	//qdc.DownloadingList = arraylist.New()
-	qdc.IdleChannel = make(chan *Task, channelIdleTaskLimit)
-	return qdc
-}
-
-func (qdc *QueueDownloadChannel) idleSize() int {
-	return len(qdc.IdleChannel)
-}
-
-func (qdc *QueueDownloadChannel) pushTaskToIdleList(task *Task) {
-	task.channel = qdc
-	qdc.IdleChannel <- task
-}
-
-func (qdc *QueueDownloadChannel) popTaskFormIdleList() *Task {
-	return <-qdc.IdleChannel
-}
-
-func (qdc *QueueDownloadChannel) run() {
-	for i := 0; i < qdc.DownloadingCountLimit; i++ {
+func (dc *downloadChannel) run() {
+	for i := 0; i < dc.downloadingCountLimit; i++ {
 		sr.New_Panic_Redo(func() {
 		Outloop:
 			for {
-				task := qdc.popTaskFormIdleList()
+				var task *Task
+				for {
+					task = dc.popTaskFormIdleList()
+					if task != nil {
+						break
+					}
+					//log.Println("no task sleep")
+					time.Sleep(500 * time.Millisecond)
+				}
 
 				if task.cancelFlag {
-					llog.Debugln("task cancel id", task.Id)
+					dc.dm.llog.Debugln("task cancel id", task.Id)
 					continue
 				}
 
-				startTime := task.lastFailTimeStamp + 15
+				startTime := task.lastFailTimeStamp + 5
 				if task.TaskType == quickTask {
 					if task.ExpireTime <= time.Now().Unix() {
 						task.fail()
@@ -150,128 +108,68 @@ func (qdc *QueueDownloadChannel) run() {
 						break
 					}
 
-					if qdc.idleSize() == 0 {
+					if dc.idleSize() == 0 {
 						time.Sleep(1 * time.Second)
 						continue
 					}
 
 					time.Sleep(100 * time.Millisecond)
-					qdc.pushTaskToIdleList(task)
+					dc.pushTaskToIdleList(task)
 					continue Outloop
 				}
-
-				//qdc.pushTaskToDownloading(task)
 
 				//start download task
 				task.startDownload()
 			}
-		}, llog).Start()
+		}, dc.dm.llog).Start()
 	}
 }
 
-//RandomDownloadChannel random run the download task
-type RandomDownloadChannel struct {
-	DownloadChannelBase
-	IdleListLock sync.RWMutex
-	IdleList     *arraylist.List
+func initChannel(dm *DownloadMgr, speedLimitBPS float64, downloadingCountLimit int, retryTimesLimt int) *downloadChannel {
+	qdc := &downloadChannel{}
+	qdc.dm = dm
+	qdc.speedLimitBPS = speedLimitBPS
+	qdc.downloadingCountLimit = downloadingCountLimit
+	qdc.retryTimesLimit = retryTimesLimt
+	qdc.idleList = arraylist.New()
+	return qdc
 }
 
-func initRandomChannel(speedLimitBPS float64, downloadingCountLimit int, retryTimesLimit int) *RandomDownloadChannel {
-	rdc := &RandomDownloadChannel{}
-	rdc.SpeedLimitBPS = speedLimitBPS
-	rdc.DownloadingCountLimit = downloadingCountLimit
-	rdc.RetryTimesLimit = retryTimesLimit
-	//rdc.DownloadingList = arraylist.New()
-	rdc.IdleList = arraylist.New()
+func popTask(dc *downloadChannel, isRandom bool) *Task {
+	dc.idleListLock.Lock()
+	defer dc.idleListLock.Unlock()
 
-	return rdc
-}
-
-func (rdc *RandomDownloadChannel) idleSize() int {
-	rdc.IdleListLock.Lock()
-	defer rdc.IdleListLock.Unlock()
-
-	return rdc.IdleList.Size()
-}
-
-func (rdc *RandomDownloadChannel) pushTaskToIdleList(task *Task) {
-	rdc.IdleListLock.Lock()
-	defer rdc.IdleListLock.Unlock()
-
-	task.channel = rdc
-	rdc.IdleList.Add(task)
-}
-
-func (rdc *RandomDownloadChannel) popTaskFormIdleList() *Task {
-	rdc.IdleListLock.Lock()
-	defer rdc.IdleListLock.Unlock()
-
-	size := rdc.IdleList.Size()
+	size := dc.idleList.Size()
 	if size <= 0 {
 		return nil
 	}
-	index := rand.Intn(size)
-	task, exist := rdc.IdleList.Get(index)
+
+	index := 0
+	if isRandom {
+		index = rand.Intn(size)
+	}
+
+	task, exist := dc.idleList.Get(index)
 	if !exist {
 		return nil
 	}
 
-	rdc.IdleList.Remove(index)
+	dc.idleList.Remove(index)
 	return task.(*Task)
 }
 
-func (rdc *RandomDownloadChannel) run() {
-	for i := 0; i < rdc.DownloadingCountLimit; i++ {
-		sr.New_Panic_Redo(func() {
-		Outloop:
-			for {
-				var task *Task
-				for {
-					task = rdc.popTaskFormIdleList()
-					if task != nil {
-						break
-					}
-					//log.Println("no task sleep")
-					time.Sleep(500 * time.Millisecond)
-				}
-
-				if task.cancelFlag {
-					llog.Debugln("task cancel id", task.Id)
-					continue
-				}
-
-				//if it's retry task,wait at least 15s from last failed,exclude quickTask
-				startTime := task.lastFailTimeStamp + 15
-				for {
-					if startTime <= time.Now().Unix() {
-						break
-					}
-
-					if rdc.idleSize() == 0 {
-						time.Sleep(1 * time.Second)
-						continue
-					}
-
-					time.Sleep(100 * time.Millisecond)
-					rdc.pushTaskToIdleList(task)
-					continue Outloop
-				}
-
-				//rdc.pushTaskToDownloading(task)
-
-				//start download task
-				task.startDownload()
-			}
-		}, llog).Start()
-	}
-}
-
 //quickChannel
-func initQuickChannel() *QueueDownloadChannel {
-	qc := initQueueChannel(1, quickChannelCountLimit, quickChannelRetryTime)
+func initQuickChannel(dm *DownloadMgr) *downloadChannel {
+	qc := initChannel(dm, 1, quickChannelCountLimit, quickChannelRetryTime)
+	qc.popTaskFormIdleList = func() *Task {
+		return popTask(qc, false)
+	}
 	qc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
+		if task.cancelFlag {
+			return true, broken_cancel
+		}
 		if task.channel.idleSize() > 0 {
-			if task.response.Duration().Seconds() > 10 && task.response.BytesPerSecond() < qc.SpeedLimitBPS {
+			if task.response.Duration().Seconds() > 10 && task.response.BytesPerSecond() < qc.speedLimitBPS {
 				//on speed and new task is waiting
 				return true, broken_noSpeed
 
@@ -294,10 +192,12 @@ func initQuickChannel() *QueueDownloadChannel {
 			//cancel and delete task
 			task.fail()
 		case broken_noSpeed:
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		case broken_lowSpeed:
+		case broken_cancel:
+			task.taskBreakOff()
 		default:
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		}
 	}
 	//for debug
@@ -306,16 +206,24 @@ func initQuickChannel() *QueueDownloadChannel {
 }
 
 //randomChannel
-func initRandomPauseChannel() *RandomDownloadChannel {
-	rc := initRandomChannel(1, randomChannelCountLimit, randomChannelRetryTime)
+func initRandomPauseChannel(dm *DownloadMgr) *downloadChannel {
+	rc := initChannel(dm, 1, randomChannelCountLimit, randomChannelRetryTime)
+
+	rc.popTaskFormIdleList = func() *Task {
+		return popTask(rc, true)
+	}
+
 	rc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
+		if task.cancelFlag {
+			return true, broken_cancel
+		}
 		if task.response.Duration().Seconds() > 15 && task.response.BytesPerSecond() < 1 {
 			//no speed
 			return true, broken_noSpeed
 		}
 		// if new task is waiting
 
-		if task.response.Duration().Seconds() > 15 && task.response.BytesPerSecond() < rc.SpeedLimitBPS {
+		if task.response.Duration().Seconds() > 15 && task.response.BytesPerSecond() < rc.speedLimitBPS {
 			//no speed
 			return true, broken_noSpeed
 		}
@@ -338,10 +246,12 @@ func initRandomPauseChannel() *RandomDownloadChannel {
 
 		case broken_expire:
 		case broken_noSpeed:
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		case broken_lowSpeed:
+		case broken_cancel:
+			task.taskBreakOff()
 		default:
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		}
 	}
 	//for debug
@@ -351,16 +261,22 @@ func initRandomPauseChannel() *RandomDownloadChannel {
 }
 
 //UnpauseFastChannel
-func initUnpauseFastChannel(dm *DownloadMgr) *QueueDownloadChannel {
-	ufc := initQueueChannel(unpauseFastChannelSpeedLimit, unpauseFastChannelCountLimit, unpauseFastChannelRetryTime)
-	ufc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
+func initUnpauseFastChannel(dm *DownloadMgr) *downloadChannel {
+	ufc := initChannel(dm, unpauseFastChannelSpeedLimit, unpauseFastChannelCountLimit, unpauseFastChannelRetryTime)
+	ufc.popTaskFormIdleList = func() *Task {
+		return popTask(ufc, false)
+	}
 
+	ufc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
+		if task.cancelFlag {
+			return true, broken_cancel
+		}
 		speed := task.response.BytesPerSecond()
 		if task.response.Duration().Seconds() > 15 && speed == 0 {
 			//fail
 			return true, broken_noSpeed
 		}
-		if task.response.Duration().Seconds() > 15 && speed < ufc.SpeedLimitBPS {
+		if task.response.Duration().Seconds() > 15 && speed < ufc.speedLimitBPS {
 			//to slow channel
 			return true, broken_lowSpeed
 		}
@@ -375,15 +291,18 @@ func initUnpauseFastChannel(dm *DownloadMgr) *QueueDownloadChannel {
 		case broken_expire:
 		case broken_noSpeed:
 			//retry or delete
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		case broken_lowSpeed:
 			//to slow channel
 			task.failTimes = 0
 			task.Status = Idle
-			llog.Infoln("to slow channel", task.SavePath)
+			task.cancel = nil
+			dm.llog.Infoln("to slow channel", task.SavePath)
 			dm.downloadChannel[unpauseSlowChannel].pushTaskToIdleList(task)
+		case broken_cancel:
+			task.taskBreakOff()
 		default:
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		}
 	}
 	//for debug
@@ -392,18 +311,24 @@ func initUnpauseFastChannel(dm *DownloadMgr) *QueueDownloadChannel {
 }
 
 //UnpauseSlowChannel
-func initUnpauseSlowChannel() *QueueDownloadChannel {
-	usc := initQueueChannel(1, unpauseSlowChannelCountLimit, unpauseSlowChannelRetryTime)
-	usc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
+func initUnpauseSlowChannel(dm *DownloadMgr) *downloadChannel {
+	usdc := initChannel(dm, 1, unpauseSlowChannelCountLimit, unpauseSlowChannelRetryTime)
+	usdc.popTaskFormIdleList = func() *Task {
+		return popTask(usdc, false)
+	}
 
+	usdc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
+		if task.cancelFlag {
+			return true, broken_cancel
+		}
 		if task.response.Duration().Seconds() > 15 &&
-			task.response.BytesPerSecond() < usc.SpeedLimitBPS {
+			task.response.BytesPerSecond() < usdc.speedLimitBPS {
 			//speed is too low
 			return true, broken_noSpeed
 		}
 		return false, no_broken
 	}
-	usc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
+	usdc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
 		switch brokenType {
 		case no_broken:
 			return
@@ -411,13 +336,15 @@ func initUnpauseSlowChannel() *QueueDownloadChannel {
 		case broken_expire:
 		case broken_noSpeed:
 			//retry or delete
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		case broken_lowSpeed:
+		case broken_cancel:
+			task.taskBreakOff()
 		default:
-			task.tryAgainOrFail()
+			task.taskBreakOff()
 		}
 	}
 	//for debug
-	usc.name = unpauseSlowChannel
-	return usc
+	usdc.name = unpauseSlowChannel
+	return usdc
 }

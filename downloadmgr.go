@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/daqnext/LocalLog/log"
+	localLog "github.com/daqnext/LocalLog/log"
 	"github.com/daqnext/go-smart-routine/sr"
 	"io"
 	"math"
@@ -24,54 +24,36 @@ type DownloadMgr struct {
 	idLock    sync.Mutex
 
 	//different channel
-	downloadChannel map[string]DownloadChannel
+	downloadChannel map[string]*downloadChannel
 
 	//
-	//ignoreHeaderMap        sync.Map
 	ignoreHeaderMap     map[string]struct{}
 	ignoreHeaderMapLock sync.RWMutex
 
 	taskMap sync.Map
+
+	//logger
+	llog *localLog.LocalLog
 }
 
 //NewDownloadMgr new instance of Download manager
-func NewDownloadMgr(logger *log.LocalLog) *DownloadMgr {
+func NewDownloadMgr(logger *localLog.LocalLog) *DownloadMgr {
 	if logger == nil {
 		panic("logger is nil")
 	}
-	llog = logger
 
 	dm := &DownloadMgr{
-		globalDownloadTaskChan: make(chan *Task, 1024*20),
+		globalDownloadTaskChan: make(chan *Task, 1024*200),
 		currentId:              0,
+		llog:                   logger,
 	}
 	dm.genDownloadChannel()
 
 	//loop go routine
 	dm.classifyNewTaskLoop()
-	dm.StartDownloadLoop()
+	dm.startDownloadLoop()
 
 	return dm
-}
-
-//init download channel
-func (dm *DownloadMgr) genDownloadChannel() {
-	dm.downloadChannel = map[string]DownloadChannel{}
-	//quickChannel
-	qc := initQuickChannel()
-	dm.downloadChannel[quickChannel] = qc
-
-	//randomChannel
-	rc := initRandomPauseChannel()
-	dm.downloadChannel[randomChannel] = rc
-
-	//unpauseFastChannel
-	ufc := initUnpauseFastChannel(dm)
-	dm.downloadChannel[unpauseFastChannel] = ufc
-
-	//unpauseSlowChannel
-	usc := initUnpauseSlowChannel()
-	dm.downloadChannel[unpauseSlowChannel] = usc
 }
 
 func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64,
@@ -86,6 +68,14 @@ func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string,
 	onFail func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
 	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, onSuccess, onFail, onDownloading)
+}
+
+func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
+	v, exist := dm.taskMap.Load(id)
+	if !exist {
+		return nil
+	}
+	return v.(*Task)
 }
 
 func (dm *DownloadMgr) addDownloadTask(
@@ -103,8 +93,8 @@ func (dm *DownloadMgr) addDownloadTask(
 		dm.currentId = 0
 	}
 	dm.currentId++
-	dm.idLock.Unlock()
 	taskId := dm.currentId
+	dm.idLock.Unlock()
 
 	//new task
 	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, onSuccess, onFail, onDownloading)
@@ -124,12 +114,20 @@ func (dm *DownloadMgr) addDownloadTask(
 	return task, nil
 }
 
-func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
-	v, exist := dm.taskMap.Load(id)
-	if !exist {
-		return nil
-	}
-	return v.(*Task)
+//init download channel
+func (dm *DownloadMgr) genDownloadChannel() {
+	dm.downloadChannel = map[string]*downloadChannel{}
+	//quickChannel
+	dm.downloadChannel[quickChannel] = initQuickChannel(dm)
+
+	//randomChannel
+	dm.downloadChannel[randomChannel] = initRandomPauseChannel(dm)
+
+	//unpauseFastChannel
+	dm.downloadChannel[unpauseFastChannel] = initUnpauseFastChannel(dm)
+
+	//unpauseSlowChannel
+	dm.downloadChannel[unpauseSlowChannel] = initUnpauseSlowChannel(dm)
 }
 
 //classifyNewTask loop classify task to different channel
@@ -150,14 +148,14 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 					}
 
 					if len(dm.globalDownloadTaskChan) == 0 {
-						llog.Debugln("wait a moment to start", task)
+						dm.llog.Debugln("wait a moment to start", task)
 						time.Sleep(1 * time.Second)
 						continue
 					}
 
 					time.Sleep(100 * time.Millisecond)
 					dm.globalDownloadTaskChan <- task
-					llog.Debugln("back to globalDownloadTaskChan", task)
+					dm.llog.Debugln("back to globalDownloadTaskChan", task)
 					continue Outloop
 				}
 
@@ -166,7 +164,7 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 				if err != nil {
 					//if fail when classify
 					//try again or fail
-					llog.Debugln("classify error", task)
+					dm.llog.Debugln("classify error", task)
 					task.failTimes++
 					task.lastFailTimeStamp = time.Now().Unix()
 					if task.failTimes > 1 {
@@ -175,8 +173,8 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 						if task.onFail != nil {
 							task.onFail(task)
 						}
-						os.Remove(task.SavePath + ".download")
-						os.Remove(task.SavePath + ".header")
+						_ = os.Remove(task.SavePath + ".download")
+						_ = os.Remove(task.SavePath + ".header")
 					} else {
 						//try again
 						dm.globalDownloadTaskChan <- task
@@ -184,11 +182,11 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 				}
 			}
 		}
-	}, llog).Start()
+	}, dm.llog).Start()
 }
 
-//PreHandleOrigin check is url support range get or not, and get origin header at same time
-func PreHandleOrigin(targetUrl string) (http.Header, bool, error) {
+//preHandleOrigin check is url support range get or not, and get origin header at same time
+func preHandleOrigin(targetUrl string) (http.Header, bool, error) {
 	var req = &http.Request{}
 	var err error
 	req.Method = "GET"
@@ -238,15 +236,8 @@ func PreHandleOrigin(targetUrl string) (http.Header, bool, error) {
 //classify check header and distribute to different channel
 func (dm *DownloadMgr) classify(task *Task) error {
 
-	//task.status = Idle
-	////if quickTask, push into quickChannel
-	//if task.taskType == quickTask {
-	//	dm.downloadChannel[quickChannel].pushTaskToIdleList(task)
-	//	return nil
-	//}
-
 	// download header and check download is resumable or not
-	header, canResume, err := PreHandleOrigin(task.TargetUrl)
+	header, canResume, err := preHandleOrigin(task.TargetUrl)
 	if err != nil {
 		//task failed
 		task.Status = Fail
@@ -272,7 +263,7 @@ func (dm *DownloadMgr) classify(task *Task) error {
 	return nil
 }
 
-func (dm *DownloadMgr) StartDownloadLoop() {
+func (dm *DownloadMgr) startDownloadLoop() {
 	for _, v := range dm.downloadChannel {
 		v.run()
 	}

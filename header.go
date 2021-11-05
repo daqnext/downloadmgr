@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
@@ -28,7 +28,7 @@ func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
 }
 
 func (dm *DownloadMgr) SaveHeader(filePath string, originHeader http.Header) error {
-	folder := path.Dir(filePath)
+	folder := filepath.Dir(filePath)
 	err := os.MkdirAll(folder, 0777)
 	if err != nil {
 		return err
@@ -41,7 +41,7 @@ func (dm *DownloadMgr) SaveHeader(filePath string, originHeader http.Header) err
 	isNeedDelete := false
 	defer func() {
 		if isNeedDelete {
-			os.Remove(headerPath)
+			_ = os.Remove(headerPath)
 		}
 	}()
 	defer file.Close()

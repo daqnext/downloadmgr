@@ -35,18 +35,9 @@ const (
 	broken_noSpeed
 	broken_pause
 	broken_lowSpeed
+	broken_cancel
 	broken_other
 )
-
-//type TaskBuilder struct {
-//	TargetUrl     string
-//	SavePath      string
-//	TaskType      TaskType
-//	ExpireTime    int64 //for quick download, cancel task if expiry
-//	OnSuccess     func(task *Task)
-//	OnFail        func(task *Task)
-//	OnDownloading func(task *Task)
-//}
 
 type Task struct {
 	//init with input param
@@ -63,11 +54,12 @@ type Task struct {
 	cancel            context.CancelFunc
 	Status            TaskStatus
 	resumable         bool
-	channel           DownloadChannel
-	dm                *DownloadMgr
+
+	//channel and dm pointer
+	channel *downloadChannel
+	dm      *DownloadMgr
 
 	//callback
-	//onStart       func(task *Task)
 	onSuccess     func(task *Task)
 	onFail        func(task *Task)
 	onDownloading func(task *Task)
@@ -102,21 +94,6 @@ func newTask(
 
 func (t *Task) CancelDownload() {
 	t.cancelFlag = true
-
-	if t.response != nil && t.response.IsComplete() {
-		return
-	}
-
-	//stop download
-	if t.cancel != nil {
-		t.cancel()
-	}
-
-	//delete from channel
-
-	//delete file
-	os.Remove(t.SavePath + ".download")
-	os.Remove(t.SavePath + ".header")
 }
 
 func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(ctx context.Context, net, addr string) (c net.Conn, err error) {
@@ -136,13 +113,19 @@ func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(ctx con
 }
 
 func (t *Task) startDownload() {
+	//downloading file temp name
 	tempSaveFile := t.SavePath + ".download"
+
+	//use grab to download
 	client := grab.NewClient()
 	client.CanResume = t.resumable
+
+	//cancel context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	connectTimeout := 5 * time.Second
-	//readWriteTimeout := time.Duration(transferTimeoutSec) * time.Second
+
+	//new request
+	connectTimeout := 7 * time.Second
 	c := &http.Client{Transport: &http.Transport{
 		Proxy:       http.ProxyFromEnvironment, //use system proxy
 		DialContext: timeoutDialer(connectTimeout, 0),
@@ -150,8 +133,8 @@ func (t *Task) startDownload() {
 	client.HTTPClient = c
 	req, err := grab.NewRequest(tempSaveFile, t.TargetUrl)
 	if err != nil {
-		t.tryAgainOrFail()
-		llog.Debugln("download fail", "err:", err)
+		t.taskBreakOff()
+		t.dm.llog.Debugln("download fail", "err:", err)
 		return
 	}
 	req = req.WithContext(ctx)
@@ -159,28 +142,30 @@ func (t *Task) startDownload() {
 	if t.cancelFlag {
 		return
 	}
+
 	// start download
 	//llog.Debugf("Downloading %s,form %v...", t.savePath, req.URL())
 	resp := client.Do(req)
 	if resp == nil {
-		t.tryAgainOrFail()
-		llog.Debugln("download fail", "err:", err)
+		t.taskBreakOff()
+		t.dm.llog.Debugln("download fail", "err:", err)
 		return
 	}
 
 	t.response = resp
 	t.cancel = cancel
 
+	//if quickTask,save header
 	if t.TaskType == quickTask && resp.HTTPResponse != nil && t.dm != nil {
 		err := t.dm.SaveHeader(t.SavePath, resp.HTTPResponse.Header)
 		if err != nil {
-			t.tryAgainOrFail()
+			t.taskBreakOff()
 			return
 		}
 	}
 
 	t.Status = Downloading
-	// start monitor loop
+	// start monitor loop, every 2s
 	ticker := time.NewTicker(2000 * time.Millisecond)
 	defer ticker.Stop()
 	var needBroken bool
@@ -198,7 +183,7 @@ Loop:
 				t.onDownloading(t)
 			}
 			var bType BrokenType
-			needBroken, bType = t.channel.checkDownloadingState(t)
+			needBroken, bType = t.channel.checkDownloadingStateFunc(t)
 			if needBroken {
 				if t.response.IsComplete() {
 					break Loop
@@ -206,7 +191,7 @@ Loop:
 				cancel()
 				brokenType = bType
 
-				llog.Debugln("broken task", t.SavePath)
+				t.dm.llog.Debugln("broken task", t.SavePath)
 				//t.channel.handleBrokenTask(t, brokenType)
 			}
 
@@ -216,23 +201,24 @@ Loop:
 		}
 	}
 
+	//if err!=nil means download not finish
 	if err := resp.Err(); err != nil {
-		llog.Debugf("Download broken: %v,file:%v", err, t.SavePath)
-		t.channel.handleBrokenTask(t, brokenType)
+		t.dm.llog.Debugf("Download broken: %v,file:%v", err, t.SavePath)
+		t.channel.handleBrokenTaskFunc(t, brokenType)
 		return
 	}
 
-	llog.Debugln("transferSize:", resp.BytesComplete())
-	//llog.Debugln(resp.BytesPerSecond())
+	t.dm.llog.Debugln("transferSize:", resp.BytesComplete())
 	info, _ := os.Stat(tempSaveFile)
-	llog.Debugln("fileSize:", info.Size())
-	llog.Debugf("Download saved to %v ", resp.Filename)
+	t.dm.llog.Debugln("fileSize:", info.Size())
+	t.dm.llog.Debugf("Download saved to %v ", resp.Filename)
 
 	//download success
 	err = os.Rename(resp.Filename, t.SavePath)
 	if err != nil {
-		os.Remove(resp.Filename)
-		os.Remove(t.SavePath + ".header")
+		_ = os.Remove(resp.Filename)
+		_ = os.Remove(t.SavePath)
+		_ = os.Remove(t.SavePath + ".header")
 		if t.onFail != nil {
 			t.onFail(t)
 		}
@@ -244,15 +230,14 @@ Loop:
 	}
 }
 
-func (t *Task) tryAgainOrFail() {
+func (t *Task) taskBreakOff() {
 	if t.cancelFlag {
-		//todo cancel download
-		os.Remove(t.SavePath + ".download")
-		os.Remove(t.SavePath + ".header")
+		_ = os.Remove(t.SavePath + ".download")
+		_ = os.Remove(t.SavePath + ".header")
 		return
 	}
 
-	if t.failTimes > t.channel.getRetryTimesLimit() {
+	if t.failTimes > t.channel.retryTimesLimit {
 		t.fail()
 		return
 	}
@@ -267,6 +252,6 @@ func (t *Task) fail() {
 	if t.onFail != nil {
 		t.onFail(t)
 	}
-	os.Remove(t.SavePath + ".download")
-	os.Remove(t.SavePath + ".header")
+	_ = os.Remove(t.SavePath + ".download")
+	_ = os.Remove(t.SavePath + ".header")
 }

@@ -5,7 +5,6 @@ import (
 	"mime"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -62,7 +61,7 @@ func guessFilename(resp *http.Response) (string, error) {
 		return "", ErrNoFilename
 	}
 
-	filename = filepath.Base(path.Clean("/" + filename))
+	filename = filepath.Base(filepath.Clean("/" + filename))
 	if filename == "" || filename == "." || filename == "/" {
 		return "", ErrNoFilename
 	}
