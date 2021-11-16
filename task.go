@@ -13,11 +13,11 @@ type TaskStatus int
 
 const (
 	New TaskStatus = iota
-	Idle
 	Pause
 	Downloading
 	Success
 	Fail
+	Expire
 )
 
 type TaskType int
@@ -45,15 +45,15 @@ type Task struct {
 	TargetUrl  string
 	SavePath   string
 	TaskType   TaskType
-	ExpireTime int64 //for quick download, cancel task if expiry
+	ExpireTime int64 //for quick download, cancel task if expiry,if set 0 never expire
 
-	//modify when downloading
-	failTimes         int
-	lastFailTimeStamp int64
-	response          *grab.Response
-	cancel            context.CancelFunc
-	Status            TaskStatus
-	resumable         bool
+	//modify when downloadin
+	failTimes      int
+	allowStartTime int64
+	response       *grab.Response
+	//cancel            context.CancelFunc
+	Status    TaskStatus
+	resumable bool
 
 	//channel and dm pointer
 	channel *downloadChannel
@@ -62,6 +62,7 @@ type Task struct {
 	//callback
 	onSuccess     func(task *Task)
 	onFail        func(task *Task)
+	onCancel      func(task *Task)
 	onDownloading func(task *Task)
 
 	//for cancel
@@ -76,18 +77,21 @@ func newTask(
 	expireTime int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
+	onCancel func(task *Task),
 	onDownloading func(task *Task),
 ) *Task {
 	task := &Task{
-		Id:            id,
-		SavePath:      savePath,
-		TargetUrl:     targetUrl,
-		TaskType:      taskType,
-		ExpireTime:    expireTime,
-		Status:        New,
-		onSuccess:     onSuccess,
-		onFail:        onFail,
-		onDownloading: onDownloading,
+		Id:             id,
+		SavePath:       savePath,
+		TargetUrl:      targetUrl,
+		TaskType:       taskType,
+		ExpireTime:     expireTime,
+		allowStartTime: time.Now().UnixMilli(),
+		Status:         New,
+		onSuccess:      onSuccess,
+		onFail:         onFail,
+		onCancel:       onCancel,
+		onDownloading:  onDownloading,
 	}
 	return task
 }
@@ -113,9 +117,6 @@ func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(ctx con
 }
 
 func (t *Task) startDownload() {
-	//downloading file temp name
-	tempSaveFile := t.SavePath + ".download"
-
 	//use grab to download
 	client := grab.NewClient()
 	client.CanResume = t.resumable
@@ -131,7 +132,7 @@ func (t *Task) startDownload() {
 		DialContext: timeoutDialer(connectTimeout, 0),
 	}}
 	client.HTTPClient = c
-	req, err := grab.NewRequest(tempSaveFile, t.TargetUrl)
+	req, err := grab.NewRequest(t.SavePath, t.TargetUrl)
 	if err != nil {
 		t.taskBreakOff()
 		t.dm.llog.Debugln("download fail", "err:", err)
@@ -140,6 +141,7 @@ func (t *Task) startDownload() {
 	req = req.WithContext(ctx)
 
 	if t.cancelFlag {
+		t.taskCancel()
 		return
 	}
 
@@ -153,7 +155,6 @@ func (t *Task) startDownload() {
 	}
 
 	t.response = resp
-	t.cancel = cancel
 
 	//if quickTask,save header
 	if t.TaskType == quickTask && resp.HTTPResponse != nil && t.dm != nil {
@@ -192,7 +193,6 @@ Loop:
 				brokenType = bType
 
 				t.dm.llog.Debugln("broken task", t.SavePath)
-				//t.channel.handleBrokenTask(t, brokenType)
 			}
 
 		case <-resp.Done:
@@ -208,8 +208,19 @@ Loop:
 		return
 	}
 
+	//download success
+	info, err := os.Stat(t.SavePath)
+	if err != nil {
+		_ = os.Remove(t.SavePath)
+		_ = os.Remove(t.SavePath + ".header")
+		if t.onFail != nil {
+			t.onFail(t)
+		}
+		return
+	}
+
 	t.dm.llog.Debugln("transferSize:", resp.BytesComplete())
-	info, _ := os.Stat(tempSaveFile)
+
 	t.dm.llog.Debugln("fileSize:", info.Size())
 	t.dm.llog.Debugf("Download saved to %v ", resp.Filename)
 
@@ -228,30 +239,51 @@ Loop:
 	if t.onSuccess != nil {
 		t.onSuccess(t)
 	}
+	t.dm.taskMap.Delete(t.Id)
+}
+
+func (t *Task) taskSuccess() {
+	if t.onSuccess != nil {
+		t.onSuccess(t)
+	}
+
 }
 
 func (t *Task) taskBreakOff() {
 	if t.cancelFlag {
-		_ = os.Remove(t.SavePath + ".download")
+		_ = os.Remove(t.SavePath)
 		_ = os.Remove(t.SavePath + ".header")
+		//todo add cancel callback
+		t.dm.taskMap.Delete(t.Id)
 		return
 	}
 
 	if t.failTimes > t.channel.retryTimesLimit {
-		t.fail()
+		t.taskFail()
 		return
 	}
 	//try again
 	t.failTimes++
-	t.lastFailTimeStamp = time.Now().Unix()
+	t.allowStartTime = time.Now().UnixMilli() + 5000
 	t.channel.pushTaskToIdleList(t)
 }
 
-func (t *Task) fail() {
+func (t *Task) taskExpire() {
+
+}
+
+func (t *Task) taskCancel() {
+	if t.onCancel != nil {
+		t.onCancel(t)
+	}
+}
+
+func (t *Task) taskFail() {
 	t.Status = Fail
 	if t.onFail != nil {
 		t.onFail(t)
 	}
-	_ = os.Remove(t.SavePath + ".download")
+	t.dm.taskMap.Delete(t.Id)
+	_ = os.Remove(t.SavePath)
 	_ = os.Remove(t.SavePath + ".header")
 }

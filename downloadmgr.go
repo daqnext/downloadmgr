@@ -16,14 +16,15 @@ import (
 )
 
 type DownloadMgr struct {
-	//channel to receive task
-	globalDownloadTaskChan chan *Task
-
 	//global id
 	currentId uint64
 	idLock    sync.Mutex
 
-	//different channel
+	//channel to receive task
+	//globalDownloadTaskChan chan *Task
+	preHandleChannel *downloadChannel
+
+	//downloadChannel channel
 	downloadChannel map[string]*downloadChannel
 
 	//
@@ -59,15 +60,17 @@ func NewDownloadMgr(logger *localLog.LocalLog) *DownloadMgr {
 func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
+	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, onSuccess, onFail, onDownloading)
+	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, onSuccess, onFail, onCancel, onDownloading)
 }
 
 func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
+	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, onSuccess, onFail, onDownloading)
+	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, onSuccess, onFail, onCancel, onDownloading)
 }
 
 func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
@@ -78,6 +81,18 @@ func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
 	return v.(*Task)
 }
 
+func (dm *DownloadMgr) GetIdleTaskSize() (map[string]int, int) {
+	totalSize := 0
+	channelIdelSizeMap := map[string]int{}
+	for k, v := range dm.downloadChannel {
+		size := v.idleSize()
+		channelIdelSizeMap[k] = size
+		totalSize += size
+	}
+	return channelIdelSizeMap, totalSize
+}
+
+//todo no error return
 func (dm *DownloadMgr) addDownloadTask(
 	savePath string,
 	targetUrl string,
@@ -85,6 +100,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	expireTime int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
+	onCancel func(task *Task),
 	onDownloading func(task *Task),
 ) (*Task, error) {
 	//gen id
@@ -97,7 +113,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	dm.idLock.Unlock()
 
 	//new task
-	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, onSuccess, onFail, onDownloading)
+	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, onSuccess, onFail, onCancel, onDownloading)
 	task.dm = dm
 
 	//into map
@@ -105,7 +121,7 @@ func (dm *DownloadMgr) addDownloadTask(
 
 	//into channel
 	if taskType == quickTask {
-		task.Status = Idle
+		task.Status = New
 		//if quickTask, push into quickChannel
 		dm.downloadChannel[quickChannel].pushTaskToIdleList(task)
 	} else {
@@ -124,7 +140,7 @@ func (dm *DownloadMgr) genDownloadChannel() {
 	dm.downloadChannel[randomChannel] = initRandomPauseChannel(dm)
 
 	//unpauseFastChannel
-	dm.downloadChannel[unpauseFastChannel] = initUnpauseFastChannel(dm)
+	dm.downloadChannel[unpauseFastChannel] = initUnpauseFastChannel(dm, unpauseFastChannelSpeedLimit)
 
 	//unpauseSlowChannel
 	dm.downloadChannel[unpauseSlowChannel] = initUnpauseSlowChannel(dm)
@@ -166,15 +182,10 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 					//try again or fail
 					dm.llog.Debugln("classify error", task)
 					task.failTimes++
-					task.lastFailTimeStamp = time.Now().Unix()
+					task.allowStartTime = time.Now().UnixMilli() + 5000
 					if task.failTimes > 1 {
 						//fail
-						task.Status = Fail
-						if task.onFail != nil {
-							task.onFail(task)
-						}
-						_ = os.Remove(task.SavePath + ".download")
-						_ = os.Remove(task.SavePath + ".header")
+						task.taskFail()
 					} else {
 						//try again
 						dm.globalDownloadTaskChan <- task
