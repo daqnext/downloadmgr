@@ -10,7 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,10 +44,12 @@ func NewDownloadMgr(logger *localLog.LocalLog) *DownloadMgr {
 	}
 
 	dm := &DownloadMgr{
-		globalDownloadTaskChan: make(chan *Task, 1024*200),
-		currentId:              0,
-		llog:                   logger,
+		currentId: 0,
+		llog:      logger,
 	}
+
+	dm.preHandleChannel = initPreHandleChannel(dm)
+
 	dm.genDownloadChannel()
 
 	//loop go routine
@@ -103,6 +105,11 @@ func (dm *DownloadMgr) addDownloadTask(
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
 ) (*Task, error) {
+	//check savePath
+	savePath = strings.Trim(savePath, " ")
+	//check targetUrl
+	targetUrl = strings.Trim(targetUrl, " ")
+
 	//gen id
 	dm.idLock.Lock()
 	if dm.currentId >= math.MaxUint64 {
@@ -121,11 +128,10 @@ func (dm *DownloadMgr) addDownloadTask(
 
 	//into channel
 	if taskType == quickTask {
-		task.Status = New
 		//if quickTask, push into quickChannel
 		dm.downloadChannel[quickChannel].pushTaskToIdleList(task)
 	} else {
-		dm.globalDownloadTaskChan <- task
+		dm.preHandleChannel.pushTaskToIdleList(task)
 	}
 	return task, nil
 }
@@ -148,31 +154,21 @@ func (dm *DownloadMgr) genDownloadChannel() {
 
 //classifyNewTask loop classify task to different channel
 func (dm *DownloadMgr) classifyNewTaskLoop() {
-	sr.New_Panic_Redo(func() {
-	Outloop:
-		for {
-			select {
-			case task := <-dm.globalDownloadTaskChan:
-
-				startTime := task.lastFailTimeStamp + 15
-				if task.TaskType == quickTask {
-					startTime = 0
+	channel := dm.preHandleChannel
+	for i := 0; i < channel.downloadingCountLimit; i++ {
+		sr.New_Panic_Redo(func() {
+			for {
+				var task *Task
+				task = channel.popTaskFormIdleList()
+				if task == nil {
+					time.Sleep(500 * time.Millisecond)
+					continue
 				}
-				for {
-					if startTime <= time.Now().Unix() {
-						break
-					}
 
-					if len(dm.globalDownloadTaskChan) == 0 {
-						dm.llog.Debugln("wait a moment to start", task)
-						time.Sleep(1 * time.Second)
-						continue
-					}
-
-					time.Sleep(100 * time.Millisecond)
-					dm.globalDownloadTaskChan <- task
-					dm.llog.Debugln("back to globalDownloadTaskChan", task)
-					continue Outloop
+				if task.cancelFlag {
+					channel.dm.llog.Debugln("task cancel id", task.Id)
+					task.taskCancel()
+					continue
 				}
 
 				//classify task
@@ -188,12 +184,12 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 						task.taskFail()
 					} else {
 						//try again
-						dm.globalDownloadTaskChan <- task
+						channel.pushTaskToIdleList(task)
 					}
 				}
 			}
-		}
-	}, dm.llog).Start()
+		}, channel.dm.llog).Start()
+	}
 }
 
 //preHandleOrigin check is url support range get or not, and get origin header at same time

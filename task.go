@@ -150,7 +150,7 @@ func (t *Task) startDownload() {
 	resp := client.Do(req)
 	if resp == nil {
 		t.taskBreakOff()
-		t.dm.llog.Debugln("download fail", "err:", err)
+		//t.dm.llog.Debugln("download fail", "err:", err)
 		return
 	}
 
@@ -209,7 +209,7 @@ Loop:
 	}
 
 	//download success
-	info, err := os.Stat(t.SavePath)
+	_, err = os.Stat(t.SavePath)
 	if err != nil {
 		_ = os.Remove(t.SavePath)
 		_ = os.Remove(t.SavePath + ".header")
@@ -219,22 +219,15 @@ Loop:
 		return
 	}
 
-	t.dm.llog.Debugln("transferSize:", resp.BytesComplete())
-
-	t.dm.llog.Debugln("fileSize:", info.Size())
-	t.dm.llog.Debugf("Download saved to %v ", resp.Filename)
+	//t.dm.llog.Debugln("transferSize:", resp.BytesComplete())
+	//t.dm.llog.Debugln("fileSize:", info.Size())
+	//t.dm.llog.Debugf("Download saved to %v ", resp.Filename)
 
 	//download success
-	err = os.Rename(resp.Filename, t.SavePath)
-	if err != nil {
-		_ = os.Remove(resp.Filename)
-		_ = os.Remove(t.SavePath)
-		_ = os.Remove(t.SavePath + ".header")
-		if t.onFail != nil {
-			t.onFail(t)
-		}
-		return
-	}
+	t.taskSuccess()
+}
+
+func (t *Task) taskSuccess() {
 	t.Status = Success
 	if t.onSuccess != nil {
 		t.onSuccess(t)
@@ -242,19 +235,9 @@ Loop:
 	t.dm.taskMap.Delete(t.Id)
 }
 
-func (t *Task) taskSuccess() {
-	if t.onSuccess != nil {
-		t.onSuccess(t)
-	}
-
-}
-
 func (t *Task) taskBreakOff() {
 	if t.cancelFlag {
-		_ = os.Remove(t.SavePath)
-		_ = os.Remove(t.SavePath + ".header")
-		//todo add cancel callback
-		t.dm.taskMap.Delete(t.Id)
+		t.taskCancel()
 		return
 	}
 
@@ -269,13 +252,22 @@ func (t *Task) taskBreakOff() {
 }
 
 func (t *Task) taskExpire() {
-
+	t.Status = Expire
+	if t.onFail != nil {
+		t.onFail(t)
+	}
+	_ = os.Remove(t.SavePath)
+	_ = os.Remove(t.SavePath + ".header")
+	t.dm.taskMap.Delete(t.Id)
 }
 
 func (t *Task) taskCancel() {
 	if t.onCancel != nil {
 		t.onCancel(t)
 	}
+	_ = os.Remove(t.SavePath)
+	_ = os.Remove(t.SavePath + ".header")
+	t.dm.taskMap.Delete(t.Id)
 }
 
 func (t *Task) taskFail() {
@@ -283,7 +275,7 @@ func (t *Task) taskFail() {
 	if t.onFail != nil {
 		t.onFail(t)
 	}
-	t.dm.taskMap.Delete(t.Id)
 	_ = os.Remove(t.SavePath)
 	_ = os.Remove(t.SavePath + ".header")
+	t.dm.taskMap.Delete(t.Id)
 }

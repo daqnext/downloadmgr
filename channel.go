@@ -41,9 +41,6 @@ const (
 type downloadChannel struct {
 	dm *DownloadMgr
 
-	//todo move to func
-	//speedLimitBPS float64
-
 	downloadingCountLimit int
 	retryTimesLimit       int
 
@@ -75,8 +72,18 @@ func (dc *downloadChannel) pushTaskToIdleList(task *Task) {
 
 	task.channel = dc
 	//sorted by allowStartTime
+	it := dc.idleList.Iterator()
+	insertPos := -1
+	for it.End(); it.Prev(); {
+		index, value := it.Index(), it.Value()
+		t := value.(*Task)
+		if t.allowStartTime <= task.allowStartTime {
+			insertPos = index
+			break
+		}
+	}
 
-	//dc.idleList.Add(task)
+	dc.idleList.Insert(insertPos+1, task)
 }
 
 func (dc *downloadChannel) getChannelName() string {
@@ -102,7 +109,6 @@ func (dc *downloadChannel) run() {
 
 				if task.TaskType == quickTask {
 					if task.ExpireTime <= time.Now().Unix() {
-						//todo task expire
 						task.taskExpire()
 						continue
 					}
@@ -136,7 +142,7 @@ func popRandomTask(dc *downloadChannel) *Task {
 	//random
 	nowTime := time.Now().UnixMilli()
 	it := dc.idleList.Iterator()
-	maxIndex := 0
+	maxIndex := -1
 	for it.Next() {
 		index, value := it.Index(), it.Value()
 		if value.(*Task).allowStartTime > nowTime {
@@ -145,7 +151,7 @@ func popRandomTask(dc *downloadChannel) *Task {
 		maxIndex = index
 	}
 
-	if maxIndex == 0 {
+	if maxIndex == -1 {
 		return nil
 	}
 
@@ -184,34 +190,21 @@ func popQueueTask(dc *downloadChannel) *Task {
 	return task
 }
 
-func popTask(dc *downloadChannel, isRandom bool) *Task {
-	dc.idleListLock.Lock()
-	defer dc.idleListLock.Unlock()
-
-	size := dc.idleList.Size()
-	if size <= 0 {
-		return nil
+func initPreHandleChannel(dm *DownloadMgr) *downloadChannel {
+	ic := initChannel(dm, preHandleChannelCountLimit, preHandleChannelRetryTime)
+	ic.popTaskFormIdleList = func() *Task {
+		return popQueueTask(ic)
 	}
 
-	index := 0
-	if isRandom {
-		index = rand.Intn(size)
-	}
-
-	task, exist := dc.idleList.Get(index)
-	if !exist {
-		return nil
-	}
-
-	dc.idleList.Remove(index)
-	return task.(*Task)
+	ic.name = preHandleChannel
+	return ic
 }
 
 //quickChannel
 func initQuickChannel(dm *DownloadMgr) *downloadChannel {
 	qc := initChannel(dm, quickChannelCountLimit, quickChannelRetryTime)
 	qc.popTaskFormIdleList = func() *Task {
-		return popTask(qc, false)
+		return popQueueTask(qc)
 	}
 	qc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
 		if task.cancelFlag {
@@ -259,7 +252,7 @@ func initRandomPauseChannel(dm *DownloadMgr) *downloadChannel {
 	rc := initChannel(dm, randomChannelCountLimit, randomChannelRetryTime)
 
 	rc.popTaskFormIdleList = func() *Task {
-		return popTask(rc, true)
+		return popRandomTask(rc)
 	}
 
 	rc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
@@ -307,7 +300,7 @@ func initRandomPauseChannel(dm *DownloadMgr) *downloadChannel {
 func initUnpauseFastChannel(dm *DownloadMgr, speedLimitBPS float64) *downloadChannel {
 	ufc := initChannel(dm, unpauseFastChannelCountLimit, unpauseFastChannelRetryTime)
 	ufc.popTaskFormIdleList = func() *Task {
-		return popTask(ufc, false)
+		return popQueueTask(ufc)
 	}
 
 	ufc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {
@@ -357,7 +350,7 @@ func initUnpauseFastChannel(dm *DownloadMgr, speedLimitBPS float64) *downloadCha
 func initUnpauseSlowChannel(dm *DownloadMgr) *downloadChannel {
 	usdc := initChannel(dm, unpauseSlowChannelCountLimit, unpauseSlowChannelRetryTime)
 	usdc.popTaskFormIdleList = func() *Task {
-		return popTask(usdc, false)
+		return popQueueTask(usdc)
 	}
 
 	usdc.checkDownloadingStateFunc = func(task *Task) (needBroken bool, brokenType BrokenType) {

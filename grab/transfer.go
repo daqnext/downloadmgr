@@ -100,3 +100,10 @@ func (c *transfer) BPS() (bps float64) {
 	}
 	return c.gauge.BPS()
 }
+
+func negation(input []byte) []byte {
+	for i := range input {
+		input[i] = ^input[i]
+	}
+	return input
+}
