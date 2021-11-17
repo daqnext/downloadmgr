@@ -3,6 +3,7 @@ package grab
 import (
 	"context"
 	"github.com/daqnext/downloadmgr/grab/bps"
+	meson_node_crypto "github.com/daqnext/meson-node-crypto"
 	"io"
 	"sync/atomic"
 	"time"
@@ -13,19 +14,21 @@ type transfer struct {
 	ctx   context.Context
 	gauge bps.Gauge
 	//lim   RateLimiter
-	w io.Writer
-	r io.Reader
-	b []byte
+	w           io.Writer
+	r           io.Reader
+	b           []byte
+	needEncrypt bool
 }
 
-func newTransfer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) *transfer {
+func newTransfer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte, needEncrypt bool) *transfer {
 	return &transfer{
 		ctx:   ctx,
-		gauge: bps.NewSMA(10), // 10 seconds moving average sampling every second
+		gauge: bps.NewSMA(11), // 10 seconds moving average sampling every second
 		//lim:   lim,
-		w: dst,
-		r: src,
-		b: buf,
+		w:           dst,
+		r:           src,
+		b:           buf,
+		needEncrypt: needEncrypt,
 	}
 }
 
@@ -52,7 +55,14 @@ func (c *transfer) copy() (written int64, err error) {
 		}
 		nr, er := c.r.Read(c.b)
 		if nr > 0 {
-			nw, ew := c.w.Write(c.b[0:nr])
+			var nw int
+			var ew error
+			if c.needEncrypt {
+				nw, ew = c.w.Write(meson_node_crypto.Encrypt(c.b[0:nr]))
+			} else {
+				nw, ew = c.w.Write(c.b[0:nr])
+			}
+
 			if nw > 0 {
 				written += int64(nw)
 				atomic.StoreInt64(&c.n, written)
@@ -99,11 +109,4 @@ func (c *transfer) BPS() (bps float64) {
 		return 0
 	}
 	return c.gauge.BPS()
-}
-
-func negation(input []byte) []byte {
-	for i := range input {
-		input[i] = ^input[i]
-	}
-	return input
 }

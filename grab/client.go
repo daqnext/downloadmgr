@@ -43,7 +43,8 @@ type Client struct {
 	// be overridden on each Request object. Default: 32KB.
 	BufferSize int
 
-	CanResume bool
+	CanResume   bool
+	NeedEncrypt bool
 }
 
 // NewClient returns a new file download Client, using default configuration.
@@ -479,7 +480,8 @@ func (c *Client) openWriter(resp *Response) stateFunc {
 		//resp.Request.RateLimiter,
 		resp.writer,
 		resp.HTTPResponse.Body,
-		b)
+		b,
+		c.NeedEncrypt)
 
 	// next step is copyFile, but this will be called later in another goroutine
 	return nil

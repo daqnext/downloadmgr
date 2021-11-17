@@ -5,6 +5,7 @@ go 1.17
 require (
 	github.com/daqnext/LocalLog v0.2.4
 	github.com/daqnext/go-smart-routine v0.1.5
+	github.com/daqnext/meson-node-crypto v0.0.0-20211117030944-8e9100d4c948
 	github.com/emirpasic/gods v1.12.0
 )
 

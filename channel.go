@@ -17,7 +17,7 @@ const (
 	unpauseSlowChannel = "unpauseSlowChannel"
 )
 
-const randomDownloadingTimeSec = 20
+const randomDownloadingTimeSec = 300 //todo set to 300 in production
 const unpauseFastChannelSpeedLimit = 800 * 1024
 
 const (
@@ -50,8 +50,6 @@ type downloadChannel struct {
 	//func
 	//checkDownloadingStateFun check state to decide is continue or stop
 	checkDownloadingStateFunc func(task *Task) (needBroken bool, brokenType BrokenType)
-	//handleBrokenTaskFun how to handle if task broken
-	handleBrokenTaskFunc func(task *Task, brokenType BrokenType)
 	//get task from idle list
 	popTaskFormIdleList func() *Task
 
@@ -86,6 +84,32 @@ func (dc *downloadChannel) pushTaskToIdleList(task *Task) {
 	dc.idleList.Insert(insertPos+1, task)
 }
 
+func (dc *downloadChannel) handleBrokenTaskFunc(task *Task, brokenType BrokenType) {
+	switch brokenType {
+	case no_broken:
+		return
+	case broken_pause:
+		//back to idle array
+		task.Status = Pause
+		dc.pushTaskToIdleList(task)
+	case broken_expire:
+		//cancel and delete task
+		task.taskExpire()
+	case broken_noSpeed:
+		task.taskBreakOff()
+	case broken_lowSpeed:
+		//to slow channel
+		task.failTimes = 0
+		task.Status = New
+		dc.dm.llog.Debugln("to slow channel", task.SavePath)
+		dc.dm.downloadChannel[unpauseSlowChannel].pushTaskToIdleList(task)
+	case broken_cancel:
+		task.taskCancel()
+	default:
+		task.taskBreakOff()
+	}
+}
+
 func (dc *downloadChannel) getChannelName() string {
 	return dc.name
 }
@@ -97,7 +121,7 @@ func (dc *downloadChannel) run() {
 				var task *Task
 				task = dc.popTaskFormIdleList()
 				if task == nil {
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(200 * time.Millisecond)
 					continue
 				}
 
@@ -120,12 +144,18 @@ func (dc *downloadChannel) run() {
 	}
 }
 
-func initChannel(dm *DownloadMgr, downloadingCountLimit int, retryTimesLimt int) *downloadChannel {
+func initChannel(dm *DownloadMgr, downloadingCountLimit int, retryTimesLimiit int) *downloadChannel {
+	if downloadingCountLimit < 1 || downloadingCountLimit > 15 {
+		panic("channel downloadingCountLimit should between 1 and 15")
+	}
+	if retryTimesLimiit < 0 || retryTimesLimiit > 5 {
+		panic("channel retryTimesLimt should between 0 and 5")
+	}
 	qdc := &downloadChannel{}
 	qdc.dm = dm
 	//qdc.speedLimitBPS = speedLimitBPS
 	qdc.downloadingCountLimit = downloadingCountLimit
-	qdc.retryTimesLimit = retryTimesLimt
+	qdc.retryTimesLimit = retryTimesLimiit
 	qdc.idleList = arraylist.New()
 	return qdc
 }
@@ -210,12 +240,10 @@ func initQuickChannel(dm *DownloadMgr) *downloadChannel {
 		if task.cancelFlag {
 			return true, broken_cancel
 		}
-		if task.channel.idleSize() > 0 {
-			if task.response.Duration().Seconds() > 10 && task.response.BytesPerSecond() < 1 {
-				//on speed and new task is waiting
-				return true, broken_noSpeed
+		if task.channel.idleSize() > 0 && task.Response.Duration().Seconds() > 10 && task.Response.BytesPerSecond() < 1 {
+			//on speed and new task is waiting
+			return true, broken_noSpeed
 
-			}
 		}
 
 		if time.Now().Unix() > task.ExpireTime {
@@ -224,23 +252,6 @@ func initQuickChannel(dm *DownloadMgr) *downloadChannel {
 		}
 
 		return false, no_broken
-	}
-	qc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-		case broken_expire:
-			//cancel and delete task
-			task.taskExpire()
-		case broken_noSpeed:
-			task.taskBreakOff()
-		case broken_lowSpeed:
-		case broken_cancel:
-			task.taskBreakOff()
-		default:
-			task.taskBreakOff()
-		}
 	}
 	//for debug
 	qc.name = quickChannel
@@ -259,36 +270,19 @@ func initRandomPauseChannel(dm *DownloadMgr) *downloadChannel {
 		if task.cancelFlag {
 			return true, broken_cancel
 		}
-		if task.response.Duration().Seconds() > 15 && task.response.BytesPerSecond() < 1 {
+
+		//todo don't break if idlelist size==0
+		if task.Response.Duration().Seconds() > 15 && task.Response.BytesPerSecond() < 1 {
 			//no speed
 			return true, broken_noSpeed
 		}
 
-		if task.channel.idleSize() > 0 && task.response.Duration().Seconds() > randomDownloadingTimeSec {
+		if task.channel.idleSize() > 0 && task.Response.Duration().Seconds() > randomDownloadingTimeSec {
 			//pause
 			return true, broken_pause
 		}
 
 		return false, no_broken
-	}
-	rc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-			//back to idle array
-			task.Status = Pause
-			rc.pushTaskToIdleList(task)
-
-		case broken_expire:
-		case broken_noSpeed:
-			task.taskBreakOff()
-		case broken_lowSpeed:
-		case broken_cancel:
-			task.taskBreakOff()
-		default:
-			task.taskBreakOff()
-		}
 	}
 	//for debug
 	rc.name = randomChannel
@@ -307,39 +301,17 @@ func initUnpauseFastChannel(dm *DownloadMgr, speedLimitBPS float64) *downloadCha
 		if task.cancelFlag {
 			return true, broken_cancel
 		}
-		speed := task.response.BytesPerSecond()
-		if task.response.Duration().Seconds() > 15 && speed < 1 {
+		speed := task.Response.BytesPerSecond()
+		if task.Response.Duration().Seconds() > 15 && speed < 1 {
 			//fail
 			return true, broken_noSpeed
 		}
-		if task.response.Duration().Seconds() > 15 && speed < speedLimitBPS {
+		if task.Response.Duration().Seconds() > 15 && speed < speedLimitBPS {
 			//to slow channel
 			return true, broken_lowSpeed
 		}
 
 		return false, no_broken
-	}
-	ufc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-		case broken_expire:
-		case broken_noSpeed:
-			//retry or delete
-			task.taskBreakOff()
-		case broken_lowSpeed:
-			//to slow channel
-			task.failTimes = 0
-			task.Status = New
-			//task.cancel = nil
-			dm.llog.Debugln("to slow channel", task.SavePath)
-			dm.downloadChannel[unpauseSlowChannel].pushTaskToIdleList(task)
-		case broken_cancel:
-			task.taskBreakOff()
-		default:
-			task.taskBreakOff()
-		}
 	}
 	//for debug
 	ufc.name = unpauseFastChannel
@@ -357,28 +329,12 @@ func initUnpauseSlowChannel(dm *DownloadMgr) *downloadChannel {
 		if task.cancelFlag {
 			return true, broken_cancel
 		}
-		if task.response.Duration().Seconds() > 15 &&
-			task.response.BytesPerSecond() < 1 {
-			//speed is too low
+		if task.Response.Duration().Seconds() > 15 &&
+			task.Response.BytesPerSecond() < 1 {
+			//speed too low
 			return true, broken_noSpeed
 		}
 		return false, no_broken
-	}
-	usdc.handleBrokenTaskFunc = func(task *Task, brokenType BrokenType) {
-		switch brokenType {
-		case no_broken:
-			return
-		case broken_pause:
-		case broken_expire:
-		case broken_noSpeed:
-			//retry or delete
-			task.taskBreakOff()
-		case broken_lowSpeed:
-		case broken_cancel:
-			task.taskBreakOff()
-		default:
-			task.taskBreakOff()
-		}
 	}
 	//for debug
 	usdc.name = unpauseSlowChannel

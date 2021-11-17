@@ -20,8 +20,7 @@ type DownloadMgr struct {
 	currentId uint64
 	idLock    sync.Mutex
 
-	//channel to receive task
-	//globalDownloadTaskChan chan *Task
+	//channel to classify task
 	preHandleChannel *downloadChannel
 
 	//downloadChannel channel
@@ -59,20 +58,20 @@ func NewDownloadMgr(logger *localLog.LocalLog) *DownloadMgr {
 	return dm
 }
 
-func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64,
+func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64, needEncrypt bool,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, onSuccess, onFail, onCancel, onDownloading)
+	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading)
 }
 
-func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string,
+func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string, needEncrypt bool,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, onSuccess, onFail, onCancel, onDownloading)
+	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, needEncrypt, onSuccess, onFail, onCancel, onDownloading)
 }
 
 func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
@@ -94,12 +93,12 @@ func (dm *DownloadMgr) GetIdleTaskSize() (map[string]int, int) {
 	return channelIdelSizeMap, totalSize
 }
 
-//todo no error return
 func (dm *DownloadMgr) addDownloadTask(
 	savePath string,
 	targetUrl string,
 	taskType TaskType,
 	expireTime int64,
+	needEncrypt bool,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
@@ -109,6 +108,10 @@ func (dm *DownloadMgr) addDownloadTask(
 	savePath = strings.Trim(savePath, " ")
 	//check targetUrl
 	targetUrl = strings.Trim(targetUrl, " ")
+	testUrl := strings.ToLower(targetUrl)
+	if !(strings.HasPrefix(testUrl, "http://") || strings.HasPrefix(testUrl, "https://")) {
+		return nil, errors.New("origin url is not http protocol")
+	}
 
 	//gen id
 	dm.idLock.Lock()
@@ -120,7 +123,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	dm.idLock.Unlock()
 
 	//new task
-	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, onSuccess, onFail, onCancel, onDownloading)
+	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading)
 	task.dm = dm
 
 	//into map
@@ -161,7 +164,7 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 				var task *Task
 				task = channel.popTaskFormIdleList()
 				if task == nil {
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(200 * time.Millisecond)
 					continue
 				}
 
@@ -176,24 +179,19 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 				if err != nil {
 					//if fail when classify
 					//try again or fail
-					dm.llog.Debugln("classify error", task)
-					task.failTimes++
-					task.allowStartTime = time.Now().UnixMilli() + 5000
-					if task.failTimes > 1 {
-						//fail
-						task.taskFail()
-					} else {
-						//try again
-						channel.pushTaskToIdleList(task)
-					}
+					dm.llog.Debugln("classify error", err, task)
+					task.taskBreakOff()
 				}
 			}
 		}, channel.dm.llog).Start()
 	}
 }
 
-//preHandleOrigin check is url support range get or not, and get origin header at same time
-func preHandleOrigin(targetUrl string) (http.Header, bool, error) {
+//checkOriginResumeSupport check is url support range get or not, and get origin header at same time
+func checkOriginResumeSupport(targetUrl string) (http.Header, bool, error) {
+	c := &http.Client{Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment, //use system proxy
+	}}
 	var req = &http.Request{}
 	var err error
 	req.Method = "GET"
@@ -202,23 +200,20 @@ func preHandleOrigin(targetUrl string) (http.Header, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
 	header := http.Header{}
 	header.Set("Range", "bytes=0-0")
 	req.Header = header
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, false, err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, false, errors.New("response status code error")
 	}
-	if resp.Body == nil {
-		return resp.Header, false, nil
-	}
-	defer resp.Body.Close()
 	result, exist := resp.Header["Accept-Ranges"]
 	if exist {
 		for _, v := range result {
@@ -242,18 +237,16 @@ func preHandleOrigin(targetUrl string) (http.Header, bool, error) {
 
 //classify check header and distribute to different channel
 func (dm *DownloadMgr) classify(task *Task) error {
-
 	// download header and check download is resumable or not
-	header, canResume, err := preHandleOrigin(task.TargetUrl)
+	header, canResume, err := checkOriginResumeSupport(task.TargetUrl)
 	if err != nil {
 		//task failed
-		task.Status = Fail
 		return err
 	}
 
 	if header != nil {
 		//save header
-		err := dm.SaveHeader(task.SavePath, header)
+		err := dm.saveHeader(task.SavePath+".header", header)
 		if err != nil {
 			return err
 		}

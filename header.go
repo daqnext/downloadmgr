@@ -9,39 +9,31 @@ import (
 )
 
 func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
-	//dm.ignoreHeaderMap.Range(func(key, value interface{}) bool {
-	//	dm.ignoreHeaderMap.Delete(key)
-	//	return true
-	//})
-	//for _, v := range ignores {
-	//	dm.ignoreHeaderMap.Store(v, struct{}{})
-	//}
+	tempMap := map[string]struct{}{}
+	for _, v := range ignores {
+		tempMap[v] = struct{}{}
+	}
 
 	dm.ignoreHeaderMapLock.Lock()
 	defer dm.ignoreHeaderMapLock.Unlock()
 
-	dm.ignoreHeaderMap = map[string]struct{}{}
-	for _, v := range ignores {
-		dm.ignoreHeaderMap[v] = struct{}{}
-	}
-
+	dm.ignoreHeaderMap = tempMap
 }
 
-func (dm *DownloadMgr) SaveHeader(filePath string, originHeader http.Header) error {
+func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header) error {
 	folder := filepath.Dir(filePath)
 	err := os.MkdirAll(folder, 0777)
 	if err != nil {
 		return err
 	}
-	headerPath := filePath + ".header"
-	file, err := os.Create(headerPath)
+	file, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
 	isNeedDelete := false
 	defer func() {
 		if isNeedDelete {
-			_ = os.Remove(headerPath)
+			_ = os.Remove(filePath)
 		}
 	}()
 	defer file.Close()

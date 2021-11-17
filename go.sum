@@ -10,6 +10,8 @@ github.com/daqnext/go-smart-routine v0.1.5 h1:vwOQJokRW/QvNdNi5ew7FhAaL65ytwQS9M
 github.com/daqnext/go-smart-routine v0.1.5/go.mod h1:sNfsCl1/96M5oCNIt1QxS99E0oD1ObnQA4vk5WMtMsE=
 github.com/daqnext/jsonparser v1.1.2 h1:wvFbVlDrc/CHST0pBUkMBi+g/jdHAlDWTGS1OnQOQu8=
 github.com/daqnext/jsonparser v1.1.2/go.mod h1:B0HLHwPJV3n69nZ2Ei8Np/BVHEotzvvEWpCc/FQ7p80=
+github.com/daqnext/meson-node-crypto v0.0.0-20211117030944-8e9100d4c948 h1:VXqn//ThxSyPb3NVETfG72KzuXi74HizPWCS8VkRvI0=
+github.com/daqnext/meson-node-crypto v0.0.0-20211117030944-8e9100d4c948/go.mod h1:5EkrAQIRIgS3J75c4kAwInyJTUYRWhOpnospLhaRTBs=
 github.com/daqnext/utils v0.0.6 h1:/N5scIMsSCbZjAywnCQR9h5sBOcd/S6DjqvWbw1katY=
 github.com/daqnext/utils v0.0.6/go.mod h1:Ly49x1O9UBk7bc9ukawrUjsqzOVFN21f8Afx+K/daN0=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
