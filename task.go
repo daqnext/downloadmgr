@@ -2,7 +2,7 @@ package downloadmgr
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"github.com/daqnext/downloadmgr/grab"
 	"net"
 	"net/http"
@@ -49,21 +49,23 @@ type Task struct {
 	NeedEncrypt bool
 
 	//modify when downloadin
-	Response       *grab.Response
-	Status         TaskStatus
-	failTimes      int
-	allowStartTime int64
-	resumable      bool
+	Response        *grab.Response
+	Status          TaskStatus
+	failTimes       int
+	allowStartTime  int64
+	canResume       bool
+	slowSpeedCalled bool
 
 	//channel and dm pointer
 	channel *downloadChannel
 	dm      *DownloadMgr
 
 	//callback
-	onSuccess     func(task *Task)
-	onFail        func(task *Task)
-	onCancel      func(task *Task)
-	onDownloading func(task *Task)
+	onSuccess         func(task *Task)
+	onFail            func(task *Task)
+	onCancel          func(task *Task)
+	onDownloading     func(task *Task)
+	slowSpeedCallback func(task *Task)
 
 	//for cancel
 	cancelFlag bool
@@ -80,20 +82,22 @@ func newTask(
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
+	slowSpeedCallback func(task *Task),
 ) *Task {
 	task := &Task{
-		Id:             id,
-		SavePath:       savePath,
-		TargetUrl:      targetUrl,
-		TaskType:       taskType,
-		ExpireTime:     expireTime,
-		NeedEncrypt:    needEncrypt,
-		allowStartTime: time.Now().UnixMilli(),
-		Status:         New,
-		onSuccess:      onSuccess,
-		onFail:         onFail,
-		onCancel:       onCancel,
-		onDownloading:  onDownloading,
+		Id:                id,
+		SavePath:          savePath,
+		TargetUrl:         targetUrl,
+		TaskType:          taskType,
+		ExpireTime:        expireTime,
+		NeedEncrypt:       needEncrypt,
+		allowStartTime:    time.Now().UnixMilli(),
+		Status:            New,
+		onSuccess:         onSuccess,
+		onFail:            onFail,
+		onCancel:          onCancel,
+		onDownloading:     onDownloading,
+		slowSpeedCallback: slowSpeedCallback,
 	}
 	return task
 }
@@ -121,7 +125,7 @@ func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(ctx con
 func (t *Task) startDownload() {
 	//use grab to download
 	client := grab.NewClient()
-	client.CanResume = t.resumable
+	client.CanResume = t.canResume
 	client.NeedEncrypt = t.NeedEncrypt
 
 	//new request
@@ -158,12 +162,10 @@ func (t *Task) startDownload() {
 	t.Response = resp
 
 	//if quickTask,save header
-	if t.TaskType == quickTask {
-		err := t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header)
-		if err != nil {
-			t.taskBreakOff()
-			return
-		}
+	err = t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header)
+	if err != nil {
+		t.taskBreakOff()
+		return
 	}
 
 	t.Status = Downloading
@@ -195,20 +197,22 @@ loop:
 		}
 	}
 
+	//if err!=nil means download not success
 	// failed || or break by system
-	//if err!=nil means download not finish
 	if err := resp.Err(); err != nil {
 		t.dm.llog.Debugf("Download broken: %v,file:%v", err, t.SavePath)
 		t.taskBreakOff()
 		return
 	}
 
-	//download success
+	//check file stat
 	_, err = os.Stat(t.SavePath)
 	if err != nil {
 		t.taskBreakOff()
 		return
 	}
+
+	//download success
 	//t.dm.llog.Debugln("transferSize:", resp.BytesComplete())
 	//t.dm.llog.Debugln("fileSize:", info.Size())
 	//t.dm.llog.Debugf("Download saved to %v ", resp.Filename)
@@ -221,18 +225,6 @@ func (t *Task) taskSuccess() {
 		t.onSuccess(t)
 	}
 	t.dm.taskMap.Delete(t.Id)
-}
-
-func (t *Task) taskBreakOff() {
-	t.Status = Fail
-	if t.failTimes > t.channel.retryTimesLimit {
-		t.taskFail()
-		return
-	}
-	//try again
-	t.failTimes++
-	t.allowStartTime = time.Now().UnixMilli() + 5000
-	t.channel.pushTaskToIdleList(t)
 }
 
 func (t *Task) taskExpire() {
@@ -254,6 +246,18 @@ func (t *Task) taskCancel() {
 	t.dm.taskMap.Delete(t.Id)
 }
 
+func (t *Task) taskBreakOff() {
+	t.Status = Fail
+	if t.failTimes >= t.channel.retryTimesLimit {
+		t.taskFail()
+		return
+	}
+	//try again
+	t.failTimes++
+	t.allowStartTime = time.Now().UnixMilli() + 5000
+	t.channel.pushTaskToIdleList(t)
+}
+
 func (t *Task) taskFail() {
 	t.Status = Fail
 	if t.onFail != nil {
@@ -266,6 +270,6 @@ func (t *Task) taskFail() {
 
 //ToString for debug
 func (t *Task) ToString() string {
-	s, _ := json.Marshal(t)
-	return string(s)
+	s := fmt.Sprintf("{\"Id\":%d,\"TargetUrl\":%s,\"SavePath\":%s,\"TaskType\":%d,\"ExpireTime\":%d,\"NeedEncrypt\":%v,\"Status\":%d}", t.Id, t.TargetUrl, t.SavePath, t.TaskType, t.ExpireTime, t.NeedEncrypt, t.Status)
+	return s
 }

@@ -63,15 +63,16 @@ func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, e
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading)
+	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading, nil)
 }
 
 func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string, needEncrypt bool,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
-	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, needEncrypt, onSuccess, onFail, onCancel, onDownloading)
+	onDownloading func(task *Task),
+	slowSpeedCallback func(task *Task)) (*Task, error) {
+	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, needEncrypt, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 }
 
 func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
@@ -93,6 +94,11 @@ func (dm *DownloadMgr) GetIdleTaskSize() (map[string]int, int) {
 	return channelIdelSizeMap, totalSize
 }
 
+//GetTaskMap for debug
+func (dm *DownloadMgr) GetTaskMap() sync.Map {
+	return dm.taskMap
+}
+
 func (dm *DownloadMgr) addDownloadTask(
 	savePath string,
 	targetUrl string,
@@ -103,6 +109,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
+	slowSpeedCallback func(task *Task),
 ) (*Task, error) {
 	//check savePath
 	savePath = strings.Trim(savePath, " ")
@@ -123,7 +130,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	dm.idLock.Unlock()
 
 	//new task
-	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading)
+	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 	task.dm = dm
 
 	//into map
@@ -187,8 +194,8 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 	}
 }
 
-//checkOriginResumeSupport check is url support range get or not, and get origin header at same time
-func checkOriginResumeSupport(targetUrl string) (http.Header, bool, error) {
+//checkOriginResumeSupport check is url support range get or not
+func checkOriginResumeSupport(targetUrl string) (bool, error) {
 	c := &http.Client{Transport: &http.Transport{
 		Proxy: http.ProxyFromEnvironment, //use system proxy
 	}}
@@ -198,7 +205,7 @@ func checkOriginResumeSupport(targetUrl string) (http.Header, bool, error) {
 	req.Close = true
 	req.URL, err = url.Parse(targetUrl)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 	defer cancel()
@@ -208,18 +215,18 @@ func checkOriginResumeSupport(targetUrl string) (http.Header, bool, error) {
 	req.Header = header
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, false, errors.New("response status code error")
+		return false, errors.New("response status code error")
 	}
 	result, exist := resp.Header["Accept-Ranges"]
 	if exist {
 		for _, v := range result {
 			if v == "bytes" {
 				//log.Println("support request range")
-				return resp.Header, true, nil
+				return true, nil
 			}
 		}
 	}
@@ -227,33 +234,25 @@ func checkOriginResumeSupport(targetUrl string) (http.Header, bool, error) {
 	buf := &bytes.Buffer{}
 	written, err := io.CopyN(buf, resp.Body, 2)
 	if err == io.EOF && written == 1 {
-		return resp.Header, true, nil
+		return true, nil
 	}
 	if err != nil {
-		return resp.Header, false, nil
+		return false, nil
 	}
-	return resp.Header, false, nil
+	return false, nil
 }
 
 //classify check header and distribute to different channel
 func (dm *DownloadMgr) classify(task *Task) error {
 	// download header and check download is resumable or not
-	header, canResume, err := checkOriginResumeSupport(task.TargetUrl)
+	canResume, err := checkOriginResumeSupport(task.TargetUrl)
 	if err != nil {
 		//task failed
 		return err
 	}
 
-	if header != nil {
-		//save header
-		err := dm.saveHeader(task.SavePath+".header", header)
-		if err != nil {
-			return err
-		}
-	}
-
 	if canResume {
-		task.resumable = true
+		task.canResume = true
 		dm.downloadChannel[randomChannel].pushTaskToIdleList(task)
 		//for test
 		//dm.downloadChannel[unpauseFastChannel].pushTaskToIdleList(task)

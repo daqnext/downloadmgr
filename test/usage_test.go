@@ -39,7 +39,8 @@ func Test_Channel(t *testing.T) {
 	//targetUrl := "https://wr1cs5-bdhkbiekdhkibxx.shoppynext.com:19091/video/spacex2-redirecter456gt.mp4"
 	//targetUrl := "https://coldcdn.com/api/cdn/wr1cs5/video/AcceleratedByUsingMesonNetwork.mp4"
 
-	for i := 0; i < 2; i++ {
+	//var tt *downloadmgr.Task
+	for i := 0; i < 3; i++ {
 		saveFile := fmt.Sprintf("./downloadFile/go1.17.2.darwin-amd64-%d.pkg", i)
 		//saveFile := fmt.Sprintf("./downloadFile/core.min-%d.js", i)
 		//saveFile := fmt.Sprintf("./downloadFile/a-%d.jpg", i)
@@ -68,25 +69,31 @@ func Test_Channel(t *testing.T) {
 			},
 			func(task *downloadmgr.Task) {
 				logger.Debugln("downloading", task.Id, task.Response.Progress(), task.Response.BytesPerSecond())
-			})
+			},
+			nil)
 
 		if err != nil {
 			logger.Errorln("task error", err)
 		}
 
 		logger.Debugln(task.ToString())
-		if i > 0 {
-			tt := task
-			go func() {
-				time.Sleep(10 * time.Second)
-				tt.CancelDownload()
-			}()
-
-		}
 	}
 
 	//saveFile := "./downloadFile/spacex2.mp4"
 	//dm.AddNormalDownloadTask(saveFile,[]string{targetUrl})
+
+	go func() {
+		for {
+			logger.Debugln("task info")
+			tm := dm.GetTaskMap()
+			tm.Range(func(key, value interface{}) bool {
+				logger.Debugln(value.(*downloadmgr.Task).Id, value.(*downloadmgr.Task).ToString())
+
+				return true
+			})
+			time.Sleep(time.Second * 1)
+		}
+	}()
 
 	go func() {
 		for {
@@ -140,7 +147,8 @@ func Test_MultiChannel(t *testing.T) {
 			},
 			func(task *downloadmgr.Task) {
 				logger.Debugln("downloading", task.Id, task.Response.Progress(), task.Response.BytesPerSecond())
-			})
+			},
+			nil)
 
 		if err != nil {
 			logger.Errorln("task error", err)

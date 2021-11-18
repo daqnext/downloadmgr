@@ -17,11 +17,14 @@ const (
 	unpauseSlowChannel = "unpauseSlowChannel"
 )
 
-const randomDownloadingTimeSec = 300 //todo set to 300 in production
-const unpauseFastChannelSpeedLimit = 800 * 1024
+const randomDownloadingTimeSec = 300            //todo set to 300 in production
+const unpauseFastChannelSpeedLimit = 500 * 1024 //500 KB/s
+
+const slowAlertTime = 200  // second
+const slowAlertSpeed = 100 // 100 KB/s
 
 const (
-	preHandleChannelCountLimit = 2
+	preHandleChannelCountLimit = 3
 
 	quickChannelCountLimit       = 6
 	randomChannelCountLimit      = 6
@@ -33,9 +36,9 @@ const (
 	preHandleChannelRetryTime = 1
 
 	quickChannelRetryTime       = 1
-	randomChannelRetryTime      = 1
+	randomChannelRetryTime      = 3
 	unpauseFastChannelRetryTime = 1
-	unpauseSlowChannelRetryTime = 1
+	unpauseSlowChannelRetryTime = 3
 )
 
 type downloadChannel struct {
@@ -144,18 +147,18 @@ func (dc *downloadChannel) run() {
 	}
 }
 
-func initChannel(dm *DownloadMgr, downloadingCountLimit int, retryTimesLimiit int) *downloadChannel {
+func initChannel(dm *DownloadMgr, downloadingCountLimit int, retryTimesLimit int) *downloadChannel {
 	if downloadingCountLimit < 1 || downloadingCountLimit > 15 {
 		panic("channel downloadingCountLimit should between 1 and 15")
 	}
-	if retryTimesLimiit < 0 || retryTimesLimiit > 5 {
-		panic("channel retryTimesLimt should between 0 and 5")
+	if retryTimesLimit < 0 || retryTimesLimit > 5 {
+		panic("channel retryTimesLimit should between 0 and 5")
 	}
 	qdc := &downloadChannel{}
 	qdc.dm = dm
 	//qdc.speedLimitBPS = speedLimitBPS
 	qdc.downloadingCountLimit = downloadingCountLimit
-	qdc.retryTimesLimit = retryTimesLimiit
+	qdc.retryTimesLimit = retryTimesLimit
 	qdc.idleList = arraylist.New()
 	return qdc
 }
@@ -240,15 +243,20 @@ func initQuickChannel(dm *DownloadMgr) *downloadChannel {
 		if task.cancelFlag {
 			return true, broken_cancel
 		}
-		if task.channel.idleSize() > 0 && task.Response.Duration().Seconds() > 10 && task.Response.BytesPerSecond() < 1 {
-			//on speed and new task is waiting
-			return true, broken_noSpeed
-
-		}
 
 		if time.Now().Unix() > task.ExpireTime {
 			//task expire
 			return true, broken_expire
+		}
+
+		if task.channel.idleSize() == 0 {
+			return false, no_broken
+		}
+
+		if task.Response.Duration().Seconds() > 5 && task.Response.BytesPerSecond() < 1 {
+			//on speed and new task is waiting
+			return true, broken_noSpeed
+
 		}
 
 		return false, no_broken
@@ -271,13 +279,24 @@ func initRandomPauseChannel(dm *DownloadMgr) *downloadChannel {
 			return true, broken_cancel
 		}
 
-		//todo don't break if idlelist size==0
-		if task.Response.Duration().Seconds() > 15 && task.Response.BytesPerSecond() < 1 {
+		if task.slowSpeedCallback != nil &&
+			task.Response.Duration().Seconds() > slowAlertTime &&
+			task.Response.BytesPerSecond() < slowAlertSpeed {
+
+			task.slowSpeedCallback(task)
+			task.slowSpeedCalled = true
+		}
+
+		if task.channel.idleSize() == 0 {
+			return false, no_broken
+		}
+
+		if task.Response.Duration().Seconds() > 5 && task.Response.BytesPerSecond() < 1 {
 			//no speed
 			return true, broken_noSpeed
 		}
 
-		if task.channel.idleSize() > 0 && task.Response.Duration().Seconds() > randomDownloadingTimeSec {
+		if task.Response.Duration().Seconds() > randomDownloadingTimeSec {
 			//pause
 			return true, broken_pause
 		}
@@ -301,10 +320,11 @@ func initUnpauseFastChannel(dm *DownloadMgr, speedLimitBPS float64) *downloadCha
 		if task.cancelFlag {
 			return true, broken_cancel
 		}
+
 		speed := task.Response.BytesPerSecond()
-		if task.Response.Duration().Seconds() > 15 && speed < 1 {
+		if task.Response.Duration().Seconds() > 5 && speed < 1 {
 			//fail
-			return true, broken_noSpeed
+			return true, broken_lowSpeed
 		}
 		if task.Response.Duration().Seconds() > 15 && speed < speedLimitBPS {
 			//to slow channel
@@ -329,11 +349,25 @@ func initUnpauseSlowChannel(dm *DownloadMgr) *downloadChannel {
 		if task.cancelFlag {
 			return true, broken_cancel
 		}
+
+		if task.slowSpeedCallback != nil &&
+			task.Response.Duration().Seconds() > slowAlertTime &&
+			task.Response.BytesPerSecond() < slowAlertSpeed {
+
+			task.slowSpeedCallback(task)
+			task.slowSpeedCalled = true
+		}
+
+		if task.channel.idleSize() == 0 {
+			return false, no_broken
+		}
+
 		if task.Response.Duration().Seconds() > 15 &&
 			task.Response.BytesPerSecond() < 1 {
 			//speed too low
 			return true, broken_noSpeed
 		}
+
 		return false, no_broken
 	}
 	//for debug
