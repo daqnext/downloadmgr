@@ -40,7 +40,7 @@ func Test_Channel(t *testing.T) {
 	//targetUrl := "https://coldcdn.com/api/cdn/wr1cs5/video/AcceleratedByUsingMesonNetwork.mp4"
 
 	//var tt *downloadmgr.Task
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 1; i++ {
 		saveFile := fmt.Sprintf("./downloadFile/go1.17.2.darwin-amd64-%d.pkg", i)
 		//saveFile := fmt.Sprintf("./downloadFile/core.min-%d.js", i)
 		//saveFile := fmt.Sprintf("./downloadFile/a-%d.jpg", i)
@@ -54,6 +54,7 @@ func Test_Channel(t *testing.T) {
 			targetUrl,
 			//time.Now().Unix()+20,
 			needEncrypt,
+			0,
 			func(task *downloadmgr.Task) {
 				logger.Infoln("success", task.Id, "targetUrl", targetUrl)
 				info, _ := os.Stat(task.SavePath)
@@ -82,18 +83,18 @@ func Test_Channel(t *testing.T) {
 	//saveFile := "./downloadFile/spacex2.mp4"
 	//dm.AddNormalDownloadTask(saveFile,[]string{targetUrl})
 
-	go func() {
-		for {
-			logger.Debugln("task info")
-			tm := dm.GetTaskMap()
-			tm.Range(func(key, value interface{}) bool {
-				logger.Debugln(value.(*downloadmgr.Task).Id, value.(*downloadmgr.Task).ToString())
-
-				return true
-			})
-			time.Sleep(time.Second * 1)
-		}
-	}()
+	//go func() {
+	//	for {
+	//		logger.Debugln("task info")
+	//		tm := dm.GetTaskMap()
+	//		tm.Range(func(key, value interface{}) bool {
+	//			logger.Debugln(value.(*downloadmgr.Task).Id, value.(*downloadmgr.Task).ToString())
+	//
+	//			return true
+	//		})
+	//		time.Sleep(time.Second * 1)
+	//	}
+	//}()
 
 	go func() {
 		for {
@@ -135,6 +136,7 @@ func Test_MultiChannel(t *testing.T) {
 			targetUrl[index],
 			//time.Now().Unix()+20,
 			needEncrypt,
+			0,
 			func(task *downloadmgr.Task) {
 				info, _ := os.Stat(task.SavePath)
 				logger.Infoln("success", task.Id, "targetUrl", targetUrl[index], "filePath", task.SavePath, "size", info.Size())

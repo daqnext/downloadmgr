@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -18,14 +19,24 @@ const (
 	Downloading
 	Success
 	Fail
-	Expire
+)
+
+type FailReasonType int
+
+const (
+	Fail_NoFail FailReasonType = iota
+	Fail_NoSpace
+	Fail_Expire
+	Fail_SizeLimit
+	Fail_RequestError
+	Fail_Other
 )
 
 type TaskType int
 
 const (
-	quickTask TaskType = iota
-	randomTask
+	QuickTask TaskType = iota
+	RandomTask
 )
 
 type BrokenType int
@@ -33,6 +44,7 @@ type BrokenType int
 const (
 	no_broken BrokenType = iota
 	broken_expire
+	broken_sizeLimit
 	broken_noSpeed
 	broken_pause
 	broken_lowSpeed
@@ -47,14 +59,15 @@ type Task struct {
 	TaskType    TaskType
 	ExpireTime  int64 //for quick download, cancel task if expiry,if set 0 never expire
 	NeedEncrypt bool
+	SizeLimit   int64 //if >0 means file has size limit, if download data > size limit, task fail
 
-	//modify when downloadin
-	Response        *grab.Response
-	Status          TaskStatus
-	failTimes       int
-	allowStartTime  int64
-	canResume       bool
-	slowSpeedCalled bool
+	//modify when downloading
+	Response       *grab.Response
+	Status         TaskStatus
+	FailReason     FailReasonType
+	failTimes      int
+	allowStartTime int64
+	canResume      bool
 
 	//channel and dm pointer
 	channel *downloadChannel
@@ -78,6 +91,7 @@ func newTask(
 	taskType TaskType,
 	expireTime int64,
 	needEncrypt bool,
+	sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
@@ -91,6 +105,7 @@ func newTask(
 		TaskType:          taskType,
 		ExpireTime:        expireTime,
 		NeedEncrypt:       needEncrypt,
+		SizeLimit:         sizeLimit,
 		allowStartTime:    time.Now().UnixMilli(),
 		Status:            New,
 		onSuccess:         onSuccess,
@@ -137,6 +152,7 @@ func (t *Task) startDownload() {
 	client.HTTPClient = c
 	req, err := grab.NewRequest(t.SavePath, t.TargetUrl)
 	if err != nil {
+		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
 		t.dm.llog.Debugln("download fail", "err:", err)
 		return
@@ -155,15 +171,24 @@ func (t *Task) startDownload() {
 	//llog.Debugf("Downloading %s,form %v...", t.savePath, req.URL())
 	resp := client.Do(req)
 	if resp == nil || resp.HTTPResponse == nil {
+		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
 		return
 	}
 
 	t.Response = resp
 
+	//check size
+	if resp.HTTPResponse.ContentLength != -1 && t.SizeLimit > 0 && resp.HTTPResponse.ContentLength > t.SizeLimit {
+		t.FailReason = Fail_SizeLimit
+		t.taskFail()
+		return
+	}
+
 	//if quickTask,save header
 	err = t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header)
 	if err != nil {
+		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
 		return
 	}
@@ -201,13 +226,20 @@ loop:
 	// failed || or break by system
 	if err := resp.Err(); err != nil {
 		t.dm.llog.Debugf("Download broken: %v,file:%v", err, t.SavePath)
-		t.taskBreakOff()
+		if strings.Contains(err.Error(), "no space") {
+			t.FailReason = Fail_NoSpace
+			t.taskFail()
+		} else {
+			t.taskBreakOff()
+		}
+
 		return
 	}
 
 	//check file stat
 	_, err = os.Stat(t.SavePath)
 	if err != nil {
+		t.FailReason = Fail_Other
 		t.taskBreakOff()
 		return
 	}
@@ -227,16 +259,6 @@ func (t *Task) taskSuccess() {
 	t.dm.taskMap.Delete(t.Id)
 }
 
-func (t *Task) taskExpire() {
-	t.Status = Expire
-	if t.onFail != nil {
-		t.onFail(t)
-	}
-	_ = os.Remove(t.SavePath)
-	_ = os.Remove(t.SavePath + ".header")
-	t.dm.taskMap.Delete(t.Id)
-}
-
 func (t *Task) taskCancel() {
 	if t.onCancel != nil {
 		t.onCancel(t)
@@ -253,6 +275,7 @@ func (t *Task) taskBreakOff() {
 		return
 	}
 	//try again
+	t.FailReason = Fail_NoFail
 	t.failTimes++
 	t.allowStartTime = time.Now().UnixMilli() + 5000
 	t.channel.pushTaskToIdleList(t)

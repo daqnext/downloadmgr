@@ -58,21 +58,21 @@ func NewDownloadMgr(logger *localLog.LocalLog) *DownloadMgr {
 	return dm
 }
 
-func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64, needEncrypt bool,
+func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, quickTask, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading, nil)
+	return dm.addDownloadTask(savePath, targetUrl, QuickTask, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, nil)
 }
 
-func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string, needEncrypt bool,
+func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
 	slowSpeedCallback func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, randomTask, 0, needEncrypt, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
+	return dm.addDownloadTask(savePath, targetUrl, RandomTask, 0, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 }
 
 func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
@@ -95,8 +95,8 @@ func (dm *DownloadMgr) GetIdleTaskSize() (map[string]int, int) {
 }
 
 //GetTaskMap for debug
-func (dm *DownloadMgr) GetTaskMap() sync.Map {
-	return dm.taskMap
+func (dm *DownloadMgr) GetTaskMap() *sync.Map {
+	return &dm.taskMap
 }
 
 func (dm *DownloadMgr) addDownloadTask(
@@ -105,6 +105,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	taskType TaskType,
 	expireTime int64,
 	needEncrypt bool,
+	sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
@@ -130,14 +131,14 @@ func (dm *DownloadMgr) addDownloadTask(
 	dm.idLock.Unlock()
 
 	//new task
-	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, needEncrypt, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
+	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 	task.dm = dm
 
 	//into map
 	dm.taskMap.Store(task.Id, task)
 
 	//into channel
-	if taskType == quickTask {
+	if taskType == QuickTask {
 		//if quickTask, push into quickChannel
 		dm.downloadChannel[quickChannel].pushTaskToIdleList(task)
 	} else {
@@ -187,6 +188,7 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 					//if fail when classify
 					//try again or fail
 					dm.llog.Debugln("classify error", err, task)
+					task.FailReason = Fail_RequestError
 					task.taskBreakOff()
 				}
 			}

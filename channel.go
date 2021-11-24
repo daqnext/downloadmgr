@@ -97,8 +97,13 @@ func (dc *downloadChannel) handleBrokenTaskFunc(task *Task, brokenType BrokenTyp
 		dc.pushTaskToIdleList(task)
 	case broken_expire:
 		//cancel and delete task
-		task.taskExpire()
+		task.FailReason = Fail_Expire
+		task.taskFail()
+	case broken_sizeLimit:
+		task.FailReason = Fail_SizeLimit
+		task.taskFail()
 	case broken_noSpeed:
+		task.FailReason = Fail_RequestError
 		task.taskBreakOff()
 	case broken_lowSpeed:
 		//to slow channel
@@ -109,6 +114,7 @@ func (dc *downloadChannel) handleBrokenTaskFunc(task *Task, brokenType BrokenTyp
 	case broken_cancel:
 		task.taskCancel()
 	default:
+		task.FailReason = Fail_Other
 		task.taskBreakOff()
 	}
 }
@@ -134,9 +140,10 @@ func (dc *downloadChannel) run() {
 					continue
 				}
 
-				if task.TaskType == quickTask {
+				if task.TaskType == QuickTask {
 					if task.ExpireTime <= time.Now().Unix() {
-						task.taskExpire()
+						task.FailReason = Fail_Expire
+						task.taskFail()
 						continue
 					}
 				}
@@ -244,6 +251,11 @@ func initQuickChannel(dm *DownloadMgr) *downloadChannel {
 			return true, broken_cancel
 		}
 
+		if task.SizeLimit > 0 && task.Response.BytesComplete() > task.SizeLimit {
+			//size limit
+			return true, broken_sizeLimit
+		}
+
 		if time.Now().Unix() > task.ExpireTime {
 			//task expire
 			return true, broken_expire
@@ -279,12 +291,16 @@ func initRandomPauseChannel(dm *DownloadMgr) *downloadChannel {
 			return true, broken_cancel
 		}
 
+		if task.SizeLimit > 0 && task.Response.BytesComplete() > task.SizeLimit {
+			//size limit
+			return true, broken_sizeLimit
+		}
+
 		if task.slowSpeedCallback != nil &&
 			task.Response.Duration().Seconds() > slowAlertTime &&
 			task.Response.BytesPerSecond() < slowAlertSpeed {
 
 			task.slowSpeedCallback(task)
-			task.slowSpeedCalled = true
 		}
 
 		if task.channel.idleSize() == 0 {
@@ -321,6 +337,11 @@ func initUnpauseFastChannel(dm *DownloadMgr, speedLimitBPS float64) *downloadCha
 			return true, broken_cancel
 		}
 
+		if task.SizeLimit > 0 && task.Response.BytesComplete() > task.SizeLimit {
+			//size limit
+			return true, broken_sizeLimit
+		}
+
 		speed := task.Response.BytesPerSecond()
 		if task.Response.Duration().Seconds() > 5 && speed < 1 {
 			//fail
@@ -350,12 +371,16 @@ func initUnpauseSlowChannel(dm *DownloadMgr) *downloadChannel {
 			return true, broken_cancel
 		}
 
+		if task.SizeLimit > 0 && task.Response.BytesComplete() > task.SizeLimit {
+			//size limit
+			return true, broken_sizeLimit
+		}
+
 		if task.slowSpeedCallback != nil &&
 			task.Response.Duration().Seconds() > slowAlertTime &&
 			task.Response.BytesPerSecond() < slowAlertSpeed {
 
 			task.slowSpeedCallback(task)
-			task.slowSpeedCalled = true
 		}
 
 		if task.channel.idleSize() == 0 {
