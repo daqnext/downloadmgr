@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
@@ -20,7 +21,8 @@ func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
 	dm.ignoreHeaderMap = tempMap
 }
 
-func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header) error {
+func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header, backupFileName string) error {
+	//todo add lock??? delete folder and create new file
 	folder := filepath.Dir(filePath)
 	err := os.MkdirAll(folder, 0777)
 	if err != nil {
@@ -58,6 +60,9 @@ func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header) err
 			return err
 		}
 		for _, v := range va {
+			if backupFileName != "" && k == "Content-Disposition" && !strings.Contains(v, "filename=") {
+				v += fmt.Sprintf("; filename=\"%s\"", backupFileName)
+			}
 			_, err = write.WriteString(fmt.Sprintf("%s\n", v))
 			if err != nil {
 				isNeedDelete = true
@@ -65,6 +70,15 @@ func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header) err
 			}
 		}
 	}
+	_, ok := originHeader["Content-Disposition"]
+	if backupFileName != "" && !ok {
+		_, err = write.WriteString(fmt.Sprintf("Content-Disposition\n1\nfilename=\"%s\"", backupFileName))
+		if err != nil {
+			isNeedDelete = true
+			return err
+		}
+	}
+
 	//Flush
 	err = write.Flush()
 	if err != nil {

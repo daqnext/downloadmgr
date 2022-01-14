@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	localLog "github.com/daqnext/LocalLog/log"
-	"github.com/daqnext/go-smart-routine/sr"
 	"io"
 	"math"
 	"net/http"
@@ -13,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/universe-30/ULog"
 )
 
 type DownloadMgr struct {
@@ -33,18 +33,16 @@ type DownloadMgr struct {
 	taskMap sync.Map
 
 	//logger
-	llog *localLog.LocalLog
+	logger ULog.Logger
+
+	folderHandleLock *sync.Mutex
 }
 
 //NewDownloadMgr new instance of Download manager
-func NewDownloadMgr(logger *localLog.LocalLog) *DownloadMgr {
-	if logger == nil {
-		panic("logger is nil")
-	}
-
+func NewDownloadMgr() *DownloadMgr {
 	dm := &DownloadMgr{
 		currentId: 0,
-		llog:      logger,
+		logger:    nil,
 	}
 
 	dm.preHandleChannel = initPreHandleChannel(dm)
@@ -58,21 +56,29 @@ func NewDownloadMgr(logger *localLog.LocalLog) *DownloadMgr {
 	return dm
 }
 
-func (dm *DownloadMgr) AddQuickDownloadTask(savePath string, targetUrl string, expireTime int64, needEncrypt bool, sizeLimit int64,
+func (dm *DownloadMgr) SetULogger(logger ULog.Logger) {
+	dm.logger = logger
+}
+
+func (dm *DownloadMgr) GetULogger() ULog.Logger {
+	return dm.logger
+}
+
+func (dm *DownloadMgr) AddQuickDownloadTask(nameHash string, provideFolder string, savePath string, targetUrl string, expireTime int64, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, QuickTask, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, nil)
+	return dm.addDownloadTask(nameHash, provideFolder, savePath, targetUrl, QuickTask, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, nil)
 }
 
-func (dm *DownloadMgr) AddNormalDownloadTask(savePath string, targetUrl string, needEncrypt bool, sizeLimit int64,
+func (dm *DownloadMgr) AddNormalDownloadTask(nameHash string, provideFolder string, savePath string, targetUrl string, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
 	slowSpeedCallback func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(savePath, targetUrl, RandomTask, 0, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
+	return dm.addDownloadTask(nameHash, provideFolder, savePath, targetUrl, RandomTask, 0, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 }
 
 func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
@@ -100,6 +106,8 @@ func (dm *DownloadMgr) GetTaskMap() *sync.Map {
 }
 
 func (dm *DownloadMgr) addDownloadTask(
+	nameHash string,
+	provideFolder string,
 	savePath string,
 	targetUrl string,
 	taskType TaskType,
@@ -118,7 +126,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	targetUrl = strings.Trim(targetUrl, " ")
 	testUrl := strings.ToLower(targetUrl)
 	if !(strings.HasPrefix(testUrl, "http://") || strings.HasPrefix(testUrl, "https://")) {
-		return nil, errors.New("origin url is not http protocol")
+		return nil, ErrOriginUrlProtocol
 	}
 
 	//gen id
@@ -131,7 +139,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	dm.idLock.Unlock()
 
 	//new task
-	task := newTask(taskId, savePath, targetUrl, taskType, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
+	task := newTask(taskId, nameHash, provideFolder, savePath, targetUrl, taskType, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 	task.dm = dm
 
 	//into map
@@ -167,7 +175,7 @@ func (dm *DownloadMgr) genDownloadChannel() {
 func (dm *DownloadMgr) classifyNewTaskLoop() {
 	channel := dm.preHandleChannel
 	for i := 0; i < channel.downloadingCountLimit; i++ {
-		sr.New_Panic_Redo(func() {
+		safeInfiLoop(func() {
 			for {
 				var task *Task
 				task = channel.popTaskFormIdleList()
@@ -177,7 +185,9 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 				}
 
 				if task.cancelFlag {
-					channel.dm.llog.Debugln("task cancel id", task.Id)
+					if channel.dm.logger != nil {
+						channel.dm.logger.Debugln("task cancel id", task.Id)
+					}
 					task.taskCancel()
 					continue
 				}
@@ -187,12 +197,14 @@ func (dm *DownloadMgr) classifyNewTaskLoop() {
 				if err != nil {
 					//if fail when classify
 					//try again or fail
-					dm.llog.Debugln("classify error", err, task)
+					if channel.dm.logger != nil {
+						dm.logger.Debugln("classify error", err, task)
+					}
 					task.FailReason = Fail_RequestError
 					task.taskBreakOff()
 				}
 			}
-		}, channel.dm.llog).Start()
+		}, nil, 0, 10)
 	}
 }
 
@@ -268,4 +280,29 @@ func (dm *DownloadMgr) startDownloadLoop() {
 	for _, v := range dm.downloadChannel {
 		v.run()
 	}
+}
+
+func safeInfiLoop(todo func(), onPanic func(err interface{}), interval int, redoDelaySec int) {
+	runChannel := make(chan struct{})
+	go func() {
+		for {
+			<-runChannel
+			go func() {
+				defer func() {
+					if err := recover(); err != nil {
+						if onPanic != nil {
+							onPanic(err)
+						}
+						time.Sleep(time.Duration(redoDelaySec) * time.Second)
+						runChannel <- struct{}{}
+					}
+				}()
+				for {
+					todo()
+					time.Sleep(time.Duration(interval) * time.Second)
+				}
+			}()
+		}
+	}()
+	runChannel <- struct{}{}
 }

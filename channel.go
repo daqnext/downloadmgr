@@ -1,11 +1,11 @@
 package downloadmgr
 
 import (
-	"github.com/daqnext/go-smart-routine/sr"
-	"github.com/emirpasic/gods/lists/arraylist"
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/emirpasic/gods/lists/arraylist"
 )
 
 const (
@@ -109,7 +109,9 @@ func (dc *downloadChannel) handleBrokenTaskFunc(task *Task, brokenType BrokenTyp
 		//to slow channel
 		task.failTimes = 0
 		task.Status = New
-		dc.dm.llog.Debugln("to slow channel", task.SavePath)
+		if dc.dm.logger != nil {
+			dc.dm.logger.Debugln("to slow channel", task.SavePath)
+		}
 		dc.dm.downloadChannel[unpauseSlowChannel].pushTaskToIdleList(task)
 	case broken_cancel:
 		task.taskCancel()
@@ -125,7 +127,7 @@ func (dc *downloadChannel) getChannelName() string {
 
 func (dc *downloadChannel) run() {
 	for i := 0; i < dc.downloadingCountLimit; i++ {
-		sr.New_Panic_Redo(func() {
+		safeInfiLoop(func() {
 			for {
 				var task *Task
 				task = dc.popTaskFormIdleList()
@@ -135,7 +137,9 @@ func (dc *downloadChannel) run() {
 				}
 
 				if task.cancelFlag {
-					dc.dm.llog.Debugln("task cancel id", task.Id)
+					if dc.dm.logger != nil {
+						dc.dm.logger.Debugln("task cancel id", task.Id)
+					}
 					task.taskCancel()
 					continue
 				}
@@ -150,7 +154,7 @@ func (dc *downloadChannel) run() {
 
 				task.startDownload()
 			}
-		}, dc.dm.llog).Start()
+		}, nil, 0, 10)
 	}
 }
 

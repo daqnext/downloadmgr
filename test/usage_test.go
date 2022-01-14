@@ -2,28 +2,29 @@ package test
 
 import (
 	"fmt"
-	"github.com/daqnext/LocalLog/log"
-	"github.com/daqnext/downloadmgr"
 	"math/rand"
 	"os"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/daqnext/downloadmgr"
+	"github.com/universe-30/LogrusULog"
+	"github.com/universe-30/ULog"
 )
 
-func printMemStats(localLog *log.LocalLog) {
+func printMemStats(logger ULog.Logger) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	localLog.Infof("Alloc = %v KB, TotalAlloc = %v KB, Sys = %v KB,Lookups = %v NumGC = %v\n", m.Alloc/1024, m.TotalAlloc/1024, m.Sys/1024, m.Lookups, m.NumGC)
+	logger.Infoln(fmt.Sprintf("Alloc = %v KB, TotalAlloc = %v KB, Sys = %v KB,Lookups = %v NumGC = %v\n", m.Alloc/1024, m.TotalAlloc/1024, m.Sys/1024, m.Lookups, m.NumGC))
 }
 
 func Test_Channel(t *testing.T) {
-	logger, _ := log.New("./logs", 2, 20, 30)
-	logger.SetLevel(log.LLEVEL_DEBUG)
-	logger.ResetLevel(log.LEVEL_DEBUG)
-	logger.SetReportCaller(true)
+	logger, _ := LogrusULog.New("./logs", 2, 20, 30)
+	logger.SetLevel(ULog.DebugLevel)
 
-	dm := downloadmgr.NewDownloadMgr(logger)
+	dm := downloadmgr.NewDownloadMgr()
+	dm.SetULogger(logger)
 
 	//targetUrl := "https://golang.org/dl/go1.17.2.darwin-amd64.pkg"
 	//saveFile := "./downloadFile/go1.17.2.darwin-amd64.pkg"
@@ -39,7 +40,7 @@ func Test_Channel(t *testing.T) {
 	//targetUrl := "https://wr1cs5-bdhkbiekdhkibxx.shoppynext.com:19091/video/spacex2-redirecter456gt.mp4"
 	//targetUrl := "https://coldcdn.com/api/cdn/wr1cs5/video/AcceleratedByUsingMesonNetwork.mp4"
 
-	//var tt *downloadmgr.Task
+	var tt *downloadmgr.Task
 	for i := 0; i < 1; i++ {
 		saveFile := fmt.Sprintf("./downloadFile/go1.17.2.darwin-amd64-%d.pkg", i)
 		//saveFile := fmt.Sprintf("./downloadFile/core.min-%d.js", i)
@@ -50,6 +51,8 @@ func Test_Channel(t *testing.T) {
 			//needEncrypt=true
 		}
 		task, err := dm.AddNormalDownloadTask(
+			"abc",
+			"1",
 			saveFile,
 			targetUrl,
 			//time.Now().Unix()+20,
@@ -78,7 +81,21 @@ func Test_Channel(t *testing.T) {
 		}
 
 		logger.Debugln(task.ToString())
+		tt = task
 	}
+
+	go func() {
+		for {
+			f, e := os.Stat(tt.SavePath)
+			if e != nil {
+				logger.Debugln("no file")
+			} else {
+				logger.Debugln(f.Size())
+			}
+
+			time.Sleep(time.Second * 1)
+		}
+	}()
 
 	//saveFile := "./downloadFile/spacex2.mp4"
 	//dm.AddNormalDownloadTask(saveFile,[]string{targetUrl})
@@ -107,12 +124,11 @@ func Test_Channel(t *testing.T) {
 }
 
 func Test_MultiChannel(t *testing.T) {
-	logger, _ := log.New("./logs", 2, 20, 30)
-	logger.SetLevel(log.LLEVEL_DEBUG)
-	logger.ResetLevel(log.LEVEL_DEBUG)
-	logger.SetReportCaller(true)
+	logger, _ := LogrusULog.New("./logs", 2, 20, 30)
+	logger.SetLevel(ULog.DebugLevel)
 
-	dm := downloadmgr.NewDownloadMgr(logger)
+	dm := downloadmgr.NewDownloadMgr()
+	dm.SetULogger(logger)
 
 	targetUrl := [4]string{}
 	targetUrl[0] = "https://golang.org/dl/go1.17.2.darwin-amd64.pkg"
@@ -132,6 +148,8 @@ func Test_MultiChannel(t *testing.T) {
 		index := rand.Intn(4)
 
 		task, err := dm.AddNormalDownloadTask(
+			fmt.Sprintf("nameHash-%d", i),
+			"1",
 			saveFile[index],
 			targetUrl[index],
 			//time.Now().Unix()+20,

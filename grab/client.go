@@ -405,7 +405,7 @@ func (c *Client) readResponse(resp *Response) stateFunc {
 
 	// check filename
 	if resp.Filename == "" {
-		filename, err := guessFilename(resp.HTTPResponse)
+		filename, err := GuessFilename(resp.HTTPResponse)
 		if err != nil {
 			resp.err = err
 			return c.closeResponse
@@ -429,6 +429,7 @@ func (c *Client) readResponse(resp *Response) stateFunc {
 //
 // Requires that Response.Filename and resp.DidResume are already be set.
 func (c *Client) openWriter(resp *Response) stateFunc {
+	//todo add lock??? delete folder and create new file
 	if !resp.Request.NoStore && !resp.Request.NoCreateDirectories {
 		resp.err = mkdirp(resp.Filename)
 		if resp.err != nil {

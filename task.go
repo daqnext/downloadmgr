@@ -3,12 +3,13 @@ package downloadmgr
 import (
 	"context"
 	"fmt"
-	"github.com/daqnext/downloadmgr/grab"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/daqnext/downloadmgr/grab"
 )
 
 type TaskStatus int
@@ -53,13 +54,15 @@ const (
 
 type Task struct {
 	//init with input param
-	Id          uint64
-	TargetUrl   string
-	SavePath    string
-	TaskType    TaskType
-	ExpireTime  int64 //for quick download, cancel task if expiry,if set 0 never expire
-	NeedEncrypt bool
-	SizeLimit   int64 //if >0 means file has size limit, if download data > size limit, task fail
+	Id            uint64
+	NameHash      string
+	ProvideFolder string
+	TargetUrl     string
+	SavePath      string
+	TaskType      TaskType
+	ExpireTime    int64 //for quick download, cancel task if expiry,if set 0 never expire
+	NeedEncrypt   bool
+	SizeLimit     int64 //if >0 means file has size limit, if download data > size limit, task fail
 
 	//modify when downloading
 	Response       *grab.Response
@@ -86,6 +89,8 @@ type Task struct {
 
 func newTask(
 	id uint64,
+	nameHash string,
+	provideFolder string,
 	savePath string,
 	targetUrl string,
 	taskType TaskType,
@@ -100,6 +105,8 @@ func newTask(
 ) *Task {
 	task := &Task{
 		Id:                id,
+		NameHash:          nameHash,
+		ProvideFolder:     provideFolder,
 		SavePath:          savePath,
 		TargetUrl:         targetUrl,
 		TaskType:          taskType,
@@ -154,7 +161,9 @@ func (t *Task) startDownload() {
 	if err != nil {
 		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
-		t.dm.llog.Debugln("download fail", "err:", err)
+		if t.dm.logger != nil {
+			t.dm.logger.Debugln("download fail", "err:", err)
+		}
 		return
 	}
 	//cancel context
@@ -185,8 +194,10 @@ func (t *Task) startDownload() {
 		return
 	}
 
-	//if quickTask,save header
-	err = t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header)
+	//save header
+	//todo add filename
+	backupFileName, _ := grab.GuessFilename(resp.HTTPResponse)
+	err = t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header, backupFileName)
 	if err != nil {
 		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
@@ -212,7 +223,9 @@ loop:
 			needBroken, bType := t.channel.checkDownloadingStateFunc(t)
 			if needBroken && !t.Response.IsComplete() {
 				t.channel.handleBrokenTaskFunc(t, bType)
-				t.dm.llog.Debugln("broken task", t.SavePath)
+				if t.dm.logger != nil {
+					t.dm.logger.Debugln("broken task", t.SavePath)
+				}
 				return
 			}
 
@@ -225,7 +238,9 @@ loop:
 	//if err!=nil means download not success
 	// failed || or break by system
 	if err := resp.Err(); err != nil {
-		t.dm.llog.Debugf("Download broken: %v,file:%v", err, t.SavePath)
+		if t.dm.logger != nil {
+			t.dm.logger.Debugln("Download broken:", err, " file:", t.SavePath)
+		}
 		if strings.Contains(err.Error(), "no space") {
 			t.FailReason = Fail_NoSpace
 			t.taskFail()

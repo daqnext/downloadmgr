@@ -46,7 +46,7 @@ func mkdirp(path string) error {
 // determined ErrNoFilename is returned.
 //
 // TODO: NoStore operations should not require a filename
-func guessFilename(resp *http.Response) (string, error) {
+func GuessFilename(resp *http.Response) (string, error) {
 	filename := resp.Request.URL.Path
 	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
 		if _, params, err := mime.ParseMediaType(cd); err == nil {
