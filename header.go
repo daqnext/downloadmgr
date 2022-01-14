@@ -21,21 +21,21 @@ func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
 	dm.ignoreHeaderMap = tempMap
 }
 
-func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header, backupFileName string) error {
+func (dm *DownloadMgr) saveHeader(headerFilePath string, originHeader http.Header, originFileName string) error {
 	//todo add lock??? delete folder and create new file
-	folder := filepath.Dir(filePath)
+	folder := filepath.Dir(headerFilePath)
 	err := os.MkdirAll(folder, 0777)
 	if err != nil {
 		return err
 	}
-	file, err := os.Create(filePath)
+	file, err := os.Create(headerFilePath)
 	if err != nil {
 		return err
 	}
 	isNeedDelete := false
 	defer func() {
 		if isNeedDelete {
-			_ = os.Remove(filePath)
+			_ = os.Remove(headerFilePath)
 		}
 	}()
 	defer file.Close()
@@ -60,8 +60,8 @@ func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header, bac
 			return err
 		}
 		for _, v := range va {
-			if backupFileName != "" && k == "Content-Disposition" && !strings.Contains(v, "filename=") {
-				v += fmt.Sprintf("; filename=\"%s\"", backupFileName)
+			if originFileName != "" && k == "Content-Disposition" && !strings.Contains(v, "filename=") {
+				v += fmt.Sprintf("; filename=\"%s\"", originFileName)
 			}
 			_, err = write.WriteString(fmt.Sprintf("%s\n", v))
 			if err != nil {
@@ -71,8 +71,8 @@ func (dm *DownloadMgr) saveHeader(filePath string, originHeader http.Header, bac
 		}
 	}
 	_, ok := originHeader["Content-Disposition"]
-	if backupFileName != "" && !ok {
-		_, err = write.WriteString(fmt.Sprintf("Content-Disposition\n1\nfilename=\"%s\"", backupFileName))
+	if originFileName != "" && !ok {
+		_, err = write.WriteString(fmt.Sprintf("Content-Disposition\n1\nfilename=\"%s\"", originFileName))
 		if err != nil {
 			isNeedDelete = true
 			return err

@@ -56,11 +56,11 @@ func NewDownloadMgr() *DownloadMgr {
 	return dm
 }
 
-func (dm *DownloadMgr) SetULogger(logger ULog.Logger) {
+func (dm *DownloadMgr) SetLogger(logger ULog.Logger) {
 	dm.logger = logger
 }
 
-func (dm *DownloadMgr) GetULogger() ULog.Logger {
+func (dm *DownloadMgr) GetLogger() ULog.Logger {
 	return dm.logger
 }
 

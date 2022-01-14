@@ -25,7 +25,7 @@ const (
 type FailReasonType int
 
 const (
-	Fail_NoFail FailReasonType = iota
+	NoFail FailReasonType = iota
 	Fail_NoSpace
 	Fail_Expire
 	Fail_SizeLimit
@@ -77,11 +77,11 @@ type Task struct {
 	dm      *DownloadMgr
 
 	//callback
-	onSuccess         func(task *Task)
-	onFail            func(task *Task)
-	onCancel          func(task *Task)
-	onDownloading     func(task *Task)
-	slowSpeedCallback func(task *Task)
+	onSuccess     func(task *Task)
+	onFail        func(task *Task)
+	onCancel      func(task *Task)
+	onDownloading func(task *Task)
+	onSlowSpeed   func(task *Task)
 
 	//for cancel
 	cancelFlag bool
@@ -101,25 +101,25 @@ func newTask(
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
-	slowSpeedCallback func(task *Task),
+	onSlowSpeed func(task *Task),
 ) *Task {
 	task := &Task{
-		Id:                id,
-		NameHash:          nameHash,
-		ProvideFolder:     provideFolder,
-		SavePath:          savePath,
-		TargetUrl:         targetUrl,
-		TaskType:          taskType,
-		ExpireTime:        expireTime,
-		NeedEncrypt:       needEncrypt,
-		SizeLimit:         sizeLimit,
-		allowStartTime:    time.Now().UnixMilli(),
-		Status:            New,
-		onSuccess:         onSuccess,
-		onFail:            onFail,
-		onCancel:          onCancel,
-		onDownloading:     onDownloading,
-		slowSpeedCallback: slowSpeedCallback,
+		Id:             id,
+		NameHash:       nameHash,
+		ProvideFolder:  provideFolder,
+		SavePath:       savePath,
+		TargetUrl:      targetUrl,
+		TaskType:       taskType,
+		ExpireTime:     expireTime,
+		NeedEncrypt:    needEncrypt,
+		SizeLimit:      sizeLimit,
+		allowStartTime: time.Now().UnixMilli(),
+		Status:         New,
+		onSuccess:      onSuccess,
+		onFail:         onFail,
+		onCancel:       onCancel,
+		onDownloading:  onDownloading,
+		onSlowSpeed:    onSlowSpeed,
 	}
 	return task
 }
@@ -195,9 +195,9 @@ func (t *Task) startDownload() {
 	}
 
 	//save header
-	//todo add filename
-	backupFileName, _ := grab.GuessFilename(resp.HTTPResponse)
-	err = t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header, backupFileName)
+	//add originFileName in header
+	originFileName, _ := grab.GuessFilename(resp.HTTPResponse)
+	err = t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header, originFileName)
 	if err != nil {
 		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
@@ -212,11 +212,6 @@ loop:
 	for {
 		select {
 		case <-ticker.C:
-			//llog.Debugf("%s transferred %v / %v bytes (%.2f%%)",
-			//	t.savePath,
-			//	resp.BytesComplete(),
-			//	resp.Size(),
-			//	100*resp.Progress())
 			if t.onDownloading != nil {
 				t.onDownloading(t)
 			}
@@ -260,9 +255,6 @@ loop:
 	}
 
 	//download success
-	//t.dm.llog.Debugln("transferSize:", resp.BytesComplete())
-	//t.dm.llog.Debugln("fileSize:", info.Size())
-	//t.dm.llog.Debugf("Download saved to %v ", resp.Filename)
 	t.taskSuccess()
 }
 
@@ -290,7 +282,7 @@ func (t *Task) taskBreakOff() {
 		return
 	}
 	//try again
-	t.FailReason = Fail_NoFail
+	t.FailReason = NoFail
 	t.failTimes++
 	t.allowStartTime = time.Now().UnixMilli() + 5000
 	t.channel.pushTaskToIdleList(t)
