@@ -54,15 +54,15 @@ const (
 
 type Task struct {
 	//init with input param
-	Id            uint64
-	NameHash      string
-	ProvideFolder string
-	TargetUrl     string
-	SavePath      string
-	TaskType      TaskType
-	ExpireTime    int64 //for quick download, cancel task if expiry,if set 0 never expire
-	NeedEncrypt   bool
-	SizeLimit     int64 //if >0 means file has size limit, if download data > size limit, task fail
+	Id       uint64
+	NameHash string
+	//ProvideFolder string
+	TargetUrl   string
+	SavePath    string
+	TaskType    TaskType
+	ExpireTime  int64 //for quick download, cancel task if expiry,if set 0 never expire
+	NeedEncrypt bool
+	SizeLimit   int64 //if >0 means file has size limit, if download data > size limit, task fail
 
 	//modify when downloading
 	Response       *grab.Response
@@ -90,7 +90,7 @@ type Task struct {
 func newTask(
 	id uint64,
 	nameHash string,
-	provideFolder string,
+	//provideFolder string,
 	savePath string,
 	targetUrl string,
 	taskType TaskType,
@@ -104,9 +104,9 @@ func newTask(
 	onSlowSpeed func(task *Task),
 ) *Task {
 	task := &Task{
-		Id:             id,
-		NameHash:       nameHash,
-		ProvideFolder:  provideFolder,
+		Id:       id,
+		NameHash: nameHash,
+		//ProvideFolder:  provideFolder,
 		SavePath:       savePath,
 		TargetUrl:      targetUrl,
 		TaskType:       taskType,

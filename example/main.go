@@ -18,6 +18,9 @@ func main() {
 	dm := downloadmgr.NewDownloadMgr()
 	dm.SetLogger(logger)
 
+	//set some ignore header
+	dm.SetIgnoreHeader([]string{})
+
 	targetUrl := [4]string{}
 	targetUrl[0] = "https://golang.org/dl/go1.17.2.darwin-amd64.pkg"
 	targetUrl[1] = "https://assets.meson.network:10443/static/js/core.min.js"
@@ -40,7 +43,6 @@ func main() {
 
 		task, err := dm.AddNormalDownloadTask(
 			fmt.Sprintf("nameHash-%d", i),
-			"1",
 			saveFile[index],
 			targetUrl[index],
 			needEncrypt,
@@ -50,7 +52,7 @@ func main() {
 				logger.Infoln("success", task.Id, "targetUrl", targetUrl[index], "filePath", task.SavePath, "size", info.Size())
 			},
 			func(task *downloadmgr.Task) {
-				logger.Debugln("fail", task.Id)
+				logger.Infoln("fail", task.Id, "fail reason:", task.FailReason)
 			},
 			func(task *downloadmgr.Task) {
 				logger.Infoln("cancel", task.Id)
