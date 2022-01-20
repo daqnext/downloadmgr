@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -43,8 +44,9 @@ type Client struct {
 	// be overridden on each Request object. Default: 32KB.
 	BufferSize int
 
-	CanResume   bool
-	NeedEncrypt bool
+	CanResume        bool
+	NeedEncrypt      bool
+	FolderHandleLock *sync.Mutex
 }
 
 // NewClient returns a new file download Client, using default configuration.
@@ -424,40 +426,77 @@ func (c *Client) readResponse(resp *Response) stateFunc {
 	return c.openWriter
 }
 
+func (c *Client) openFile(resp *Response) (*os.File, error) {
+	// compute write flags
+	flag := os.O_CREATE | os.O_WRONLY
+	if resp.fi != nil {
+		if resp.DidResume {
+			flag = os.O_APPEND | os.O_WRONLY
+		} else {
+			// truncate later in copyFile, if not cancelled
+			// by BeforeCopy hook
+			flag = os.O_WRONLY
+		}
+	}
+	if c.FolderHandleLock != nil && flag&os.O_CREATE != 0 {
+		c.FolderHandleLock.Lock()
+		defer c.FolderHandleLock.Unlock()
+	}
+	err := mkdirp(resp.Filename)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(resp.Filename, flag, 0666)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // openWriter opens the destination file for writing and seeks to the location
 // from whence the file transfer will resume.
 //
 // Requires that Response.Filename and resp.DidResume are already be set.
 func (c *Client) openWriter(resp *Response) stateFunc {
 	//todo add lock??? delete folder and create new file
-	if !resp.Request.NoStore && !resp.Request.NoCreateDirectories {
-		resp.err = mkdirp(resp.Filename)
-		if resp.err != nil {
-			return c.closeResponse
-		}
-	}
+	//if !resp.Request.NoStore && !resp.Request.NoCreateDirectories {
+	//	resp.err = mkdirp(resp.Filename)
+	//	if resp.err != nil {
+	//		return c.closeResponse
+	//	}
+	//}
 
 	if resp.Request.NoStore {
 		resp.writer = &resp.storeBuffer
 	} else {
-		// compute write flags
-		flag := os.O_CREATE | os.O_WRONLY
-		if resp.fi != nil {
-			if resp.DidResume {
-				flag = os.O_APPEND | os.O_WRONLY
-			} else {
-				// truncate later in copyFile, if not cancelled
-				// by BeforeCopy hook
-				flag = os.O_WRONLY
-			}
-		}
-
-		// open file
-		f, err := os.OpenFile(resp.Filename, flag, 0666)
+		f, err := c.openFile(resp)
 		if err != nil {
 			resp.err = err
 			return c.closeResponse
 		}
+
+		// compute write flags
+		//flag := os.O_CREATE | os.O_WRONLY
+		//if resp.fi != nil {
+		//	if resp.DidResume {
+		//		flag = os.O_APPEND | os.O_WRONLY
+		//	} else {
+		//		// truncate later in copyFile, if not cancelled
+		//		// by BeforeCopy hook
+		//		flag = os.O_WRONLY
+		//	}
+		//}
+		//
+		//// open file
+		//resp.err = mkdirp(resp.Filename)
+		//if resp.err != nil {
+		//	return c.closeResponse
+		//}
+		//f, err := os.OpenFile(resp.Filename, flag, 0666)
+		//if err != nil {
+		//	resp.err = err
+		//	return c.closeResponse
+		//}
 		resp.writer = f
 
 		// seek to start or end

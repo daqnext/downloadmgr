@@ -149,6 +149,7 @@ func (t *Task) startDownload() {
 	client := grab.NewClient()
 	client.CanResume = t.canResume
 	client.NeedEncrypt = t.NeedEncrypt
+	client.FolderHandleLock = t.dm.folderHandleLock
 
 	//new request
 	connectTimeout := 7 * time.Second

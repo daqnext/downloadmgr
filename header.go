@@ -21,17 +21,43 @@ func (dm *DownloadMgr) SetIgnoreHeader(ignores []string) {
 	dm.ignoreHeaderMap = tempMap
 }
 
-func (dm *DownloadMgr) saveHeader(headerFilePath string, originHeader http.Header, originFileName string) error {
-	//todo add lock??? delete folder and create new file
+func (dm *DownloadMgr) genHeaderFile(headerFilePath string) (*os.File, error) {
 	folder := filepath.Dir(headerFilePath)
+
+	//lock
+	if dm.folderHandleLock != nil {
+		dm.folderHandleLock.Lock()
+		defer dm.folderHandleLock.Unlock()
+	}
+
 	err := os.MkdirAll(folder, 0777)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	file, err := os.Create(headerFilePath)
 	if err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+func (dm *DownloadMgr) saveHeader(headerFilePath string, originHeader http.Header, originFileName string) error {
+	file, err := dm.genHeaderFile(headerFilePath)
+	if err != nil {
 		return err
 	}
+	//todo add lock??? delete folder and create new file
+	//folder := filepath.Dir(headerFilePath)
+	//dm.folderHandleLock.Lock()
+	//err := os.MkdirAll(folder, 0777)
+	//if err != nil {
+	//	dm.folderHandleLock.Unlock()
+	//	return err
+	//}
+	//file, err := os.Create(headerFilePath)
+	//if err != nil {
+	//	return err
+	//}
 	isNeedDelete := false
 	defer func() {
 		if isNeedDelete {
