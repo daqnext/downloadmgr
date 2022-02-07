@@ -57,12 +57,12 @@ type Task struct {
 	Id       uint64
 	NameHash string
 	//ProvideFolder string
-	TargetUrl   string
-	SavePath    string
-	TaskType    TaskType
-	ExpireTime  int64 //for quick download, cancel task if expiry,if set 0 never expire
-	NeedEncrypt bool
-	SizeLimit   int64 //if >0 means file has size limit, if download data > size limit, task fail
+	TargetUrl  string
+	SavePath   string
+	TaskType   TaskType
+	ExpireTime int64 //for quick download, cancel task if expiry,if set 0 never expire
+	Encrypt    bool
+	SizeLimit  int64 //if >0 means file has size limit, if download data > size limit, task fail
 
 	//modify when downloading
 	Response       *grab.Response
@@ -95,7 +95,7 @@ func newTask(
 	targetUrl string,
 	taskType TaskType,
 	expireTime int64,
-	needEncrypt bool,
+	encrypt bool,
 	sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
@@ -111,7 +111,7 @@ func newTask(
 		TargetUrl:      targetUrl,
 		TaskType:       taskType,
 		ExpireTime:     expireTime,
-		NeedEncrypt:    needEncrypt,
+		Encrypt:        encrypt,
 		SizeLimit:      sizeLimit,
 		allowStartTime: time.Now().UnixMilli(),
 		Status:         New,
@@ -148,8 +148,7 @@ func (t *Task) startDownload() {
 	//use grab to download
 	client := grab.NewClient()
 	client.CanResume = t.canResume
-	client.NeedEncrypt = t.NeedEncrypt
-	client.FolderHandleLock = t.dm.folderHandleLock
+	client.NeedEncrypt = t.Encrypt
 
 	//new request
 	connectTimeout := 7 * time.Second
@@ -301,6 +300,6 @@ func (t *Task) taskFail() {
 
 //ToString for debug
 func (t *Task) ToString() string {
-	s := fmt.Sprintf("{\"Id\":%d,\"TargetUrl\":%s,\"SavePath\":%s,\"TaskType\":%d,\"ExpireTime\":%d,\"NeedEncrypt\":%v,\"Status\":%d}", t.Id, t.TargetUrl, t.SavePath, t.TaskType, t.ExpireTime, t.NeedEncrypt, t.Status)
+	s := fmt.Sprintf("{\"Id\":%d,\"TargetUrl\":%s,\"SavePath\":%s,\"TaskType\":%d,\"ExpireTime\":%d,\"NeedEncrypt\":%v,\"Status\":%d}", t.Id, t.TargetUrl, t.SavePath, t.TaskType, t.ExpireTime, t.Encrypt, t.Status)
 	return s
 }

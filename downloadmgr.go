@@ -34,16 +34,13 @@ type DownloadMgr struct {
 
 	//logger
 	logger ULog.Logger
-
-	folderHandleLock *sync.Mutex
 }
 
 //NewDownloadMgr new instance of Download manager
-func NewDownloadMgr(folderLock *sync.Mutex) *DownloadMgr {
+func NewDownloadMgr() *DownloadMgr {
 	dm := &DownloadMgr{
-		currentId:        0,
-		logger:           nil,
-		folderHandleLock: folderLock,
+		currentId: 0,
+		logger:    nil,
 	}
 
 	dm.preHandleChannel = initPreHandleChannel(dm)

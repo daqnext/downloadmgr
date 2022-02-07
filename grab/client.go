@@ -438,10 +438,6 @@ func (c *Client) openFile(resp *Response) (*os.File, error) {
 			flag = os.O_WRONLY
 		}
 	}
-	if c.FolderHandleLock != nil && flag&os.O_CREATE != 0 {
-		c.FolderHandleLock.Lock()
-		defer c.FolderHandleLock.Unlock()
-	}
 	err := mkdirp(resp.Filename)
 	if err != nil {
 		return nil, err
@@ -458,7 +454,7 @@ func (c *Client) openFile(resp *Response) (*os.File, error) {
 //
 // Requires that Response.Filename and resp.DidResume are already be set.
 func (c *Client) openWriter(resp *Response) stateFunc {
-	//todo add lock??? delete folder and create new file
+
 	//if !resp.Request.NoStore && !resp.Request.NoCreateDirectories {
 	//	resp.err = mkdirp(resp.Filename)
 	//	if resp.err != nil {
@@ -474,29 +470,6 @@ func (c *Client) openWriter(resp *Response) stateFunc {
 			resp.err = err
 			return c.closeResponse
 		}
-
-		// compute write flags
-		//flag := os.O_CREATE | os.O_WRONLY
-		//if resp.fi != nil {
-		//	if resp.DidResume {
-		//		flag = os.O_APPEND | os.O_WRONLY
-		//	} else {
-		//		// truncate later in copyFile, if not cancelled
-		//		// by BeforeCopy hook
-		//		flag = os.O_WRONLY
-		//	}
-		//}
-		//
-		//// open file
-		//resp.err = mkdirp(resp.Filename)
-		//if resp.err != nil {
-		//	return c.closeResponse
-		//}
-		//f, err := os.OpenFile(resp.Filename, flag, 0666)
-		//if err != nil {
-		//	resp.err = err
-		//	return c.closeResponse
-		//}
 		resp.writer = f
 
 		// seek to start or end
