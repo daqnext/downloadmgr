@@ -54,9 +54,9 @@ const (
 
 type Task struct {
 	//init with input param
-	Id       uint64
-	NameHash string
-	//ProvideFolder string
+	Id         uint64
+	NameHash   string
+	FolderId   uint32
 	TargetUrl  string
 	SavePath   string
 	TaskType   TaskType
@@ -90,6 +90,7 @@ type Task struct {
 func newTask(
 	id uint64,
 	nameHash string,
+	folderId uint32,
 	savePath string,
 	targetUrl string,
 	taskType TaskType,
@@ -105,6 +106,7 @@ func newTask(
 	task := &Task{
 		Id:             id,
 		NameHash:       nameHash,
+		FolderId:       folderId,
 		SavePath:       savePath,
 		TargetUrl:      targetUrl,
 		TaskType:       taskType,

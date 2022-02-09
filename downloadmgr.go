@@ -64,22 +64,22 @@ func (dm *DownloadMgr) GetLogger() ULog.Logger {
 
 //AddQuickDownloadTask start a quick download task. Quick tasks start the download as soon as possible and have an expiration time.
 //The task will fail when it expires.
-func (dm *DownloadMgr) AddQuickDownloadTask(nameHash string, savePath string, targetUrl string, expireTime int64, needEncrypt bool, sizeLimit int64,
+func (dm *DownloadMgr) AddQuickDownloadTask(nameHash string, folderId uint32, savePath string, targetUrl string, expireTime int64, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(nameHash, savePath, targetUrl, QuickTask, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, nil)
+	return dm.addDownloadTask(nameHash, folderId, savePath, targetUrl, QuickTask, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, nil)
 }
 
 //AddNormalDownloadTask start a normal download task. Task will be push to different download channel depends on it is resumable or not
-func (dm *DownloadMgr) AddNormalDownloadTask(nameHash string, savePath string, targetUrl string, needEncrypt bool, sizeLimit int64,
+func (dm *DownloadMgr) AddNormalDownloadTask(nameHash string, folderId uint32, savePath string, targetUrl string, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
 	slowSpeedCallback func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(nameHash, savePath, targetUrl, RandomTask, 0, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
+	return dm.addDownloadTask(nameHash, folderId, savePath, targetUrl, RandomTask, 0, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 }
 
 func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {
@@ -107,6 +107,7 @@ func (dm *DownloadMgr) GetTaskMap() *sync.Map {
 
 func (dm *DownloadMgr) addDownloadTask(
 	nameHash string,
+	folderId uint32,
 	savePath string,
 	targetUrl string,
 	taskType TaskType,
@@ -138,7 +139,7 @@ func (dm *DownloadMgr) addDownloadTask(
 	dm.idLock.Unlock()
 
 	//new task
-	task := newTask(taskId, nameHash, savePath, targetUrl, taskType, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
+	task := newTask(taskId, nameHash, folderId, savePath, targetUrl, taskType, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 	task.dm = dm
 
 	//into map
