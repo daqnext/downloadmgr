@@ -36,7 +36,7 @@ type DownloadMgr struct {
 	logger ULog.Logger
 }
 
-//NewDownloadMgr new instance of Download manager
+//NewDownloadMgr new instance of Download manager. Background jobs will start to classify and download
 func NewDownloadMgr() *DownloadMgr {
 	dm := &DownloadMgr{
 		currentId: 0,
@@ -62,6 +62,8 @@ func (dm *DownloadMgr) GetLogger() ULog.Logger {
 	return dm.logger
 }
 
+//AddQuickDownloadTask start a quick download task. Quick tasks start the download as soon as possible and have an expiration time.
+//The task will fail when it expires.
 func (dm *DownloadMgr) AddQuickDownloadTask(nameHash string, savePath string, targetUrl string, expireTime int64, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
@@ -70,6 +72,7 @@ func (dm *DownloadMgr) AddQuickDownloadTask(nameHash string, savePath string, ta
 	return dm.addDownloadTask(nameHash, savePath, targetUrl, QuickTask, expireTime, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, nil)
 }
 
+//AddNormalDownloadTask start a normal download task. Task will be push to different download channel depends on it is resumable or not
 func (dm *DownloadMgr) AddNormalDownloadTask(nameHash string, savePath string, targetUrl string, needEncrypt bool, sizeLimit int64,
 	onSuccess func(task *Task),
 	onFail func(task *Task),
@@ -98,7 +101,6 @@ func (dm *DownloadMgr) GetIdleTaskSize() (map[string]int, int) {
 	return channelIdelSizeMap, totalSize
 }
 
-//GetTaskMap for debug
 func (dm *DownloadMgr) GetTaskMap() *sync.Map {
 	return &dm.taskMap
 }
@@ -168,7 +170,7 @@ func (dm *DownloadMgr) genDownloadChannel() {
 	dm.downloadChannel[unpauseSlowChannel] = initUnpauseSlowChannel(dm)
 }
 
-//classifyNewTask loop classify task to different channel
+//classifyNewTaskLoop start several goroutine,loop classify task to different channel
 func (dm *DownloadMgr) classifyNewTaskLoop() {
 	channel := dm.preHandleChannel
 	for i := 0; i < channel.downloadingCountLimit; i++ {

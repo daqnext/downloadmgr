@@ -90,7 +90,6 @@ type Task struct {
 func newTask(
 	id uint64,
 	nameHash string,
-	//provideFolder string,
 	savePath string,
 	targetUrl string,
 	taskType TaskType,
@@ -104,9 +103,8 @@ func newTask(
 	onSlowSpeed func(task *Task),
 ) *Task {
 	task := &Task{
-		Id:       id,
-		NameHash: nameHash,
-		//ProvideFolder:  provideFolder,
+		Id:             id,
+		NameHash:       nameHash,
 		SavePath:       savePath,
 		TargetUrl:      targetUrl,
 		TaskType:       taskType,
@@ -124,6 +122,7 @@ func newTask(
 	return task
 }
 
+//CancelDownload cancel download task by manual
 func (t *Task) CancelDownload() {
 	t.cancelFlag = true
 }

@@ -34,6 +34,7 @@ func (dm *DownloadMgr) genHeaderFile(headerFilePath string) (*os.File, error) {
 	return file, nil
 }
 
+//saveHeader save response header to disk. Header file name will be fileHashName.header
 func (dm *DownloadMgr) saveHeader(headerFilePath string, originHeader http.Header, originFileName string) error {
 	file, err := dm.genHeaderFile(headerFilePath)
 	if err != nil {

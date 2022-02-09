@@ -70,6 +70,7 @@ func (dc *downloadChannel) idleSize() int {
 	return dc.idleList.Size()
 }
 
+//pushTaskToIdleList push a task into idle list. The Tasks are sorted by allow start time.
 func (dc *downloadChannel) pushTaskToIdleList(task *Task) {
 	dc.idleListLock.Lock()
 	defer dc.idleListLock.Unlock()
@@ -128,6 +129,7 @@ func (dc *downloadChannel) getChannelName() string {
 	return dc.name
 }
 
+//run download channel start several goroutine to get task from idle list and do download
 func (dc *downloadChannel) run() {
 	for i := 0; i < dc.downloadingCountLimit; i++ {
 		safeInfiLoop(func() {
@@ -177,6 +179,7 @@ func initChannel(dm *DownloadMgr, downloadingCountLimit int, retryTimesLimit int
 	return qdc, nil
 }
 
+//popRandomTask get task from idle list randomly.The candidate task must have reached allow start time.
 func popRandomTask(dc *downloadChannel) *Task {
 	dc.idleListLock.Lock()
 	defer dc.idleListLock.Unlock()
@@ -213,6 +216,8 @@ func popRandomTask(dc *downloadChannel) *Task {
 	return task.(*Task)
 }
 
+//popRandomTask get the first task of idle list. Tasks are sorted by allow start time. It returns nil if the first task
+//do not reach all start time.
 func popQueueTask(dc *downloadChannel) *Task {
 	dc.idleListLock.Lock()
 	defer dc.idleListLock.Unlock()
