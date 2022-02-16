@@ -29,10 +29,10 @@ func main() {
 
 	for i := 0; i < 10; i++ {
 		saveFile := [4]string{}
-		saveFile[0] = fmt.Sprintf("./downloadFile/go1.17.2.darwin-amd64-%d.pkg", i)
-		saveFile[1] = fmt.Sprintf("./downloadFile/core.min-%d.js", i)
-		saveFile[2] = fmt.Sprintf("./downloadFile/a-%d.jpg", i)
-		saveFile[3] = fmt.Sprintf("./downloadFile/spacex2-%d.mp4", i)
+		saveFile[0] = fmt.Sprintf("./downloadFile/1/go1.17.2.darwin-amd64-%d.pkg", i)
+		saveFile[1] = fmt.Sprintf("./downloadFile/2/core.min-%d.js", i)
+		saveFile[2] = fmt.Sprintf("./downloadFile/3/a-%d.jpg", i)
+		saveFile[3] = fmt.Sprintf("./downloadFile/4/spacex2-%d.mp4", i)
 
 		needEncrypt := false
 		if rand.Intn(2) == 1 {
@@ -43,6 +43,7 @@ func main() {
 
 		task, err := dm.AddNormalDownloadTask(
 			fmt.Sprintf("nameHash-%d", i),
+			12345,
 			saveFile[index],
 			targetUrl[index],
 			needEncrypt,

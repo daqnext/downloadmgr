@@ -39,8 +39,9 @@ type DownloadMgr struct {
 //NewDownloadMgr new instance of Download manager. Background jobs will start to classify and download
 func NewDownloadMgr() *DownloadMgr {
 	dm := &DownloadMgr{
-		currentId: 0,
-		logger:    nil,
+		currentId:       0,
+		logger:          nil,
+		ignoreHeaderMap: map[string]struct{}{},
 	}
 
 	dm.preHandleChannel = initPreHandleChannel(dm)

@@ -163,7 +163,7 @@ func (t *Task) startDownload() {
 		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
 		if t.dm.logger != nil {
-			t.dm.logger.Debugln("download fail", "err:", err)
+			t.dm.logger.Debugln("download fail", "err:", err, " task:", t.ToString())
 		}
 		return
 	}
@@ -182,6 +182,15 @@ func (t *Task) startDownload() {
 	resp := client.Do(req)
 	if resp == nil || resp.HTTPResponse == nil {
 		t.FailReason = Fail_RequestError
+		t.taskBreakOff()
+		return
+	}
+
+	if err := resp.Err(); err != nil {
+		t.FailReason = Fail_Other
+		if t.dm.logger != nil {
+			t.dm.logger.Debugln("download fail", "err:", err, " task:", t.ToString())
+		}
 		t.taskBreakOff()
 		return
 	}
