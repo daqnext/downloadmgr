@@ -209,6 +209,7 @@ func (t *Task) startDownload() {
 	originFileName, _ := grab.GuessFilename(resp.HTTPResponse)
 	err = t.dm.saveHeader(t.SavePath+".header", resp.HTTPResponse.Header, originFileName)
 	if err != nil {
+
 		t.FailReason = Fail_RequestError
 		t.taskBreakOff()
 		return
@@ -257,8 +258,8 @@ loop:
 	}
 
 	//check file stat
-	_, err = os.Stat(t.SavePath)
-	if err != nil {
+	f, err := os.Stat(t.SavePath)
+	if err != nil || f.Size() == 0 {
 		t.FailReason = Fail_Other
 		t.taskBreakOff()
 		return

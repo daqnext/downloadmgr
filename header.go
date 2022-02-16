@@ -44,7 +44,7 @@ func (dm *DownloadMgr) saveHeader(headerFilePath string, originHeader http.Heade
 	isNeedDelete := false
 	defer func() {
 		if isNeedDelete {
-			_ = os.Remove(headerFilePath)
+			os.Remove(headerFilePath)
 		}
 	}()
 	defer file.Close()
