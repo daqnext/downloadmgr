@@ -24,15 +24,13 @@ func main() {
 	targetUrl := [4]string{}
 	targetUrl[0] = "https://golang.org/dl/go1.17.2.darwin-amd64.pkg"
 	targetUrl[1] = "https://assets.meson.network:10443/static/js/core.min.js"
-	targetUrl[2] = "https://image.baidu.com/search/down?tn=download&word=download&ie=utf8&fr=detail&url=https%3A%2F%2Fgimg2.baidu.com%2Fimage_search%2Fsrc%3Dhttp%253A%252F%252Fadfa.org.au%252Fwp-content%252Fuploads%252F2016%252F08%252Fwhereisasbestos-1024x889.png%26refer%3Dhttp%253A%252F%252Fadfa.org.au%26app%3D2002%26size%3Df9999%2C10000%26q%3Da80%26n%3D0%26g%3D0n%26fmt%3Djpeg%3Fsec%3D1632884767%26t%3Dbf86afc7d333af922f306f47fe41a272&thumburl=https%3A%2F%2Fimg1.baidu.com%2Fit%2Fu%3D281490118%2C363118662%26fm%3D15%26fmt%3Dauto%26gp%3D0.jpg"
-	targetUrl[3] = "https://coldcdn.com/api/cdn/wr1cs5/video/spacex2.mp4"
+	targetUrl[2] = "https://coldcdn.com/api/cdn/wr1cs5/video/spacex2.mp4"
 
 	for i := 0; i < 10; i++ {
 		saveFile := [4]string{}
 		saveFile[0] = fmt.Sprintf("./downloadFile/1/go1.17.2.darwin-amd64-%d.pkg", i)
 		saveFile[1] = fmt.Sprintf("./downloadFile/2/core.min-%d.js", i)
-		saveFile[2] = fmt.Sprintf("./downloadFile/3/a-%d.jpg", i)
-		saveFile[3] = fmt.Sprintf("./downloadFile/4/spacex2-%d.mp4", i)
+		saveFile[2] = fmt.Sprintf("./downloadFile/4/spacex2-%d.mp4", i)
 
 		needEncrypt := false
 		if rand.Intn(2) == 1 {

@@ -80,7 +80,7 @@ func (dm *DownloadMgr) AddNormalDownloadTask(nameHash string, folderId uint32, s
 	onCancel func(task *Task),
 	onDownloading func(task *Task),
 	slowSpeedCallback func(task *Task)) (*Task, error) {
-	return dm.addDownloadTask(nameHash, folderId, savePath, targetUrl, RandomTask, 0, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
+	return dm.addDownloadTask(nameHash, folderId, savePath, targetUrl, NormalTask, 0, needEncrypt, sizeLimit, onSuccess, onFail, onCancel, onDownloading, slowSpeedCallback)
 }
 
 func (dm *DownloadMgr) GetTaskInfo(id uint64) *Task {

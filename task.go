@@ -37,7 +37,7 @@ type TaskType int
 
 const (
 	QuickTask TaskType = iota
-	RandomTask
+	NormalTask
 )
 
 type BrokenType int
